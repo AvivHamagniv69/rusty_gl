@@ -1,10 +1,23 @@
 use std::f64::consts::PI;
+use std::option;
 
 use sdl2::rect::Point;
 use sdl2::pixels::Color;
 
-fn multiply_matricies(matrix_a: &[&[f64]]) {
-
+// todo: find a way to return as a slice
+pub fn multiply_vector_by_matrix<'a>(vector: &'a [f64], matrix: &[&[f64]]) -> Option<Vec<Vec<f64>>> {
+    // the length of the vector has to be the same as the length of the collumns of the matrix
+    if vector.len() != matrix[0].len() {
+        None
+    } else {
+        let mut f = vec![vec![0.0; matrix.len()]; matrix[0].len()];
+        for i in 0..matrix.len() {
+            for j in 0..matrix[0].len() {
+                f[i][j] = matrix[i][j] * vector[j];
+            }
+        }
+        Some(f)
+    }
 }
 
 #[derive(Copy, Clone)]
@@ -129,16 +142,47 @@ impl Obj3d {
         return origin_point;
     }
 
+    pub fn rotate_x_axis(&mut self, mut angle: f64) {
+        angle *= PI/180.0;
+        let sin_angle = f64::sin(angle);
+        let cos_angle = f64::cos(angle);
+
+        for i in 0..self.vertecies.len() {
+            let y: f64 = self.vertecies[i].y;
+            let z: f64 = self.vertecies[i].z;
+
+            self.vertecies[i].y = cos_angle * y + (-sin_angle) * z;
+            self.vertecies[i].z = sin_angle * y + cos_angle * z;
+        }
+        self.originPoint = Obj3d::set_origin_point(&self.vertecies);
+    }
+
+    pub fn rotate_y_axis(&mut self, mut angle: f64) {
+        angle *= PI/180.0;
+        let sin_angle = f64::sin(angle);
+        let cos_angle = f64::cos(angle);
+
+        for i in 0..self.vertecies.len() {
+            let x: f64 = self.vertecies[i].x;
+            let z: f64 = self.vertecies[i].z;
+
+            self.vertecies[i].x = cos_angle * x + sin_angle * z;
+            self.vertecies[i].z = -sin_angle * x + cos_angle * z;
+        }
+        self.originPoint = Obj3d::set_origin_point(&self.vertecies);
+    }
+
     pub fn rotate_z_axis(&mut self, mut angle: f64) {
         angle *= PI/180.0;
         let sin_angle = f64::sin(angle);
         let cos_angle = f64::cos(angle);
-        for i in 0..self.vertecies.len() {
-            let y = self.vertecies[i].y - self.originPoint.y;
-            let z = self.vertecies[i].z - self.originPoint.z;
 
-            self.vertecies[i].y = (y * cos_angle - z * sin_angle) + self.originPoint.y;
-            self.vertecies[i].z = (z * cos_angle + y * sin_angle) + self.originPoint.y;
+        for i in 0..self.vertecies.len() {
+            let x = self.vertecies[i].x;
+            let y = self.vertecies[i].y;
+
+            self.vertecies[i].x = cos_angle * x - sin_angle * y;
+            self.vertecies[i].y = sin_angle * x + cos_angle * y;
         }
         self.originPoint = Obj3d::set_origin_point(&self.vertecies);
     }
