@@ -8,16 +8,9 @@ use sdl2::rect::Point;
 use std::time::Duration;
 use rand::prelude::*;
 
-// TODO:
-/*
-    make a print point to screen function (with projection)
-    make a projection function
-    make a print obj to the scene function
- */
-
 fn main() {
     let mut points: Buffer = Buffer::init();
-    let camera = Camera::init(Point3d { x: (0.0), y: (0.0), z: (0.0) }, 1000, 1000, 70.0, 0.1, 5000.0);
+    let camera = Camera::init(Point3d { x: (0.0), y: (0.0), z: (0.0) }, 1000, 1000, 120.0, 0.1, 5000.0);
     let mut obj = Obj3d::init(
         &[
             Point3d::init(-0.5, -0.5, 0.11),
@@ -57,7 +50,7 @@ fn main() {
     let mut i = 0;
     let mut rng = rand::thread_rng();
     'running: loop {
-        obj.rotate_z_axis(10.0);
+        obj.rotate_x_axis(0.1);
         points = Buffer::init();
         for event in event_pump.poll_iter() {
             match event {
