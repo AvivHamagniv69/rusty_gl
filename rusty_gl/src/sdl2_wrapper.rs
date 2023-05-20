@@ -1,4 +1,4 @@
-use sdl2;
+use sdl2::{self, rect::Point};
 use sdl2::render::Canvas;
 use sdl2::video::Window;
 
@@ -32,10 +32,42 @@ impl Lines for Canvas<Window> {
             self.draw_line(buffer.points[buffer.indices[i]], buffer.points[buffer.indices[i+1]]).unwrap();
         }
     }
+    
     fn draw_points_w(&mut self, buffer: &Buffer) {
         for i in 0..buffer.points.len() {
             self.set_draw_color(buffer.points_colors[i]);
             self.draw_point(buffer.points[i]).unwrap();
         }
+    }
+}
+
+pub trait Triangles {
+    fn draw_triangle(&mut self, points: [Point; 3]);
+    fn draw_triangles(&mut self, buffer: &Buffer);
+}
+
+impl Triangles for Canvas<Window> {
+    fn draw_triangle(&mut self, points: [Point; 3]) {
+        let min_x = 
+        if points[0].x <= points[1].x && points[0].x <= points[2].x {
+            points[0].x
+        }
+        else if points[1].x <= points[0].x && points[1].x <= points[2].x {
+            points[1].x
+        }
+        else {
+            points[2].x
+        };
+
+        let min_x = 
+        if points[0].x <= points[1].x && points[0].x <= points[2].x {
+            points[0].x
+        }
+        else if points[1].x <= points[0].x && points[1].x <= points[2].x {
+            points[1].x
+        }
+        else {
+            points[2].x
+        };
     }
 }
