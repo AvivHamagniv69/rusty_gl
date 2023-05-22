@@ -48,26 +48,91 @@ pub trait Triangles {
 
 impl Triangles for Canvas<Window> {
     fn draw_triangle(&mut self, points: [Point; 3]) {
-        let min_x = 
-        if points[0].x <= points[1].x && points[0].x <= points[2].x {
-            points[0].x
+        let p_min = 
+        if points[0].y <= points[1].y && points[0].y <= points[2].y {
+            points[0]
         }
-        else if points[1].x <= points[0].x && points[1].x <= points[2].x {
-            points[1].x
+        else if points[1].y <= points[0].y && points[1].y <= points[2].y {
+            points[1]
         }
         else {
-            points[2].x
+            points[2]
+        };
+        
+        let p_max = 
+        if points[0].y >= points[1].y && points[0].y >= points[2].y {
+            points[0]
+        }
+        else if points[1].y >= points[0].y && points[1].y >= points[2].y {
+            points[1]
+        } else {
+            points[2]
         };
 
-        let min_x = 
-        if points[0].x <= points[1].x && points[0].x <= points[2].x {
-            points[0].x
+        let p_mid = 
+        if points[0] != p_max && points[0] != p_min {
+            points[0]
         }
-        else if points[1].x <= points[0].x && points[1].x <= points[2].x {
-            points[1].x
+        else if points[1] != p_max && points[1] != p_min {
+            points[1]
         }
         else {
-            points[2].x
+            points[2]
         };
+
+        let mut m_min_to_max: f64;
+        if p_min.x as f64 - p_max.y as f64 != 0.0 && p_min.x as f64 - p_max.y as f64 != -0.0 {
+            m_min_to_max = (p_min.y as f64 - p_max.y as f64) / (p_min.x as f64 - p_max.y as f64);
+        }  
+        else if p_min.x as f64 - p_max.y as f64 == -0.0 {
+            m_min_to_max = (p_min.y as f64 - p_max.y as f64) / (-0.00000000001 as f64);
+        }
+        else {
+            m_min_to_max = (p_min.y as f64 - p_max.y as f64) / (0.00000000001 as f64);
+        }
+        let b_min_to_max: f64 = -m_min_to_max * p_min.x as f64 + p_min.y as f64;
+
+        let mut m_min_to_mid: f64;
+        if p_min.x as f64 - p_mid.y as f64 != 0.0 && p_min.x as f64 - p_mid.y as f64 != -0.0 {
+            m_min_to_mid = (p_min.y as f64 - p_mid.y as f64) / (p_min.x as f64 - p_mid.y as f64);
+        }
+        else if p_min.x as f64 - p_mid.y as f64 == -0.0 {
+            m_min_to_mid = (p_min.y as f64 - p_mid.y as f64) / (-0.00000000001 as f64);
+        }
+        else {
+            m_min_to_mid = (p_min.y as f64 - p_mid.y as f64) / (0.00000000001 as f64);
+        }
+        let b_min_to_mid: f64 = -m_min_to_mid * p_min.x as f64 + p_min.y as f64;
+
+        let mut m_mid_to_max: f64;
+        if p_max.x as f64 - p_mid.y as f64 != 0.0 && p_max.x as f64 - p_mid.y as f64 != -0.0 {
+            m_mid_to_max = (p_max.y as f64 - p_mid.y as f64) / (p_max.x as f64 - p_mid.y as f64);
+        }  
+        else if p_max.x as f64 - p_mid.y as f64 == -0.0 {
+            m_mid_to_max = (p_max.y as f64 - p_mid.y as f64) / (-0.00000000001 as f64)
+        }
+        else {
+            m_mid_to_max = (p_max.y as f64 - p_mid.y as f64) / (0.00000000001 as f64)
+        }
+        
+        let b_mid_to_max: f64 = -m_mid_to_max * p_mid.x as f64 + p_mid.y as f64;
+
+        println!("{:#?}", p_min);
+        println!("{:#?}", p_mid);
+
+        for y in p_min.y..p_mid.y {
+            let x_start = (y as f64/m_min_to_max) - (b_min_to_max/m_min_to_max);
+            let x_end = (y as f64/m_min_to_mid) - (b_min_to_mid/m_min_to_mid);
+            self.draw_line(Point::new(x_start as i32, y), Point::new(x_end as i32, y)).unwrap();
+        }
+        for y in p_mid.y..p_max.y {
+            let x_start = (y as f64/m_min_to_max) - (b_min_to_max/m_min_to_max);
+            let x_end = (y as f64/m_mid_to_max) - (b_mid_to_max/m_mid_to_max);
+            self.draw_line(Point::new(x_start as i32, y), Point::new(x_end as i32, y)).unwrap();
+        }
+    }
+
+    fn draw_triangles(&mut self, buffer: &Buffer) {
+        
     }
 }
