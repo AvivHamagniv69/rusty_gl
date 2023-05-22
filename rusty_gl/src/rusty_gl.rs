@@ -33,13 +33,19 @@ impl Point3d {
     
     pub fn project_point(point: Point3d, camera: &Camera) -> Point {
         let w = (2.0*camera.near_clipping_plane*camera.far_clipping_plane)/(camera.near_clipping_plane-camera.far_clipping_plane);
-        let z = (point.z*(camera.far_clipping_plane/(camera.far_clipping_plane-camera.near_clipping_plane)) - ((camera.far_clipping_plane * camera.near_clipping_plane)/(camera.far_clipping_plane-camera.near_clipping_plane)));
-        
+        let mut z = (point.z*(camera.far_clipping_plane/(camera.far_clipping_plane-camera.near_clipping_plane)) - ((camera.far_clipping_plane * camera.near_clipping_plane)/(camera.far_clipping_plane-camera.near_clipping_plane)));
+        if (z == 0.0) {
+            z = 0.000001;
+        }
+        else if z == -0.0 {
+            z = -0.0000001;
+        }
+
         let x = ((camera.width as f64) / (camera.height as f64) * camera.fov * point.x)/z;
         let y = (camera.fov * point.y)/z;
 
-        let new_x = x + (camera.width as f64/2.0);
-        let new_y = y + (camera.height as f64/2.0);
+        let new_x = (camera.near_clipping_plane/z) * x + camera.width as f64/2.0;
+        let new_y = (camera.near_clipping_plane/z) * y + camera.height as f64 / 2.0;
 
         Point::new(new_x as i32, new_y as i32)
     }
