@@ -1,43 +1,34 @@
 use sdl2;
 use sdl2::event::Event;
-use sdl2::keyboard::Keycode;
 use sdl2::pixels::Color;
-use sdl2::rect::Point;
 use std::time::Duration;
 
 pub mod rusty_gl;
-use rusty_gl::{*};
+use crate::rusty_gl::Camera;
+use crate::rusty_gl::ObjLoader;
+use crate::rusty_gl::Point3;
+use crate::rusty_gl::Buffer;
+use crate::rusty_gl::SdlWrapper;
 
-pub mod sdl2_wrapper;
-use sdl2_wrapper::{*};
+/*
+    TODO:
+    fix clipping
+    add gui
+    add rotation
+    add movement
+    add camera movement
+    add camera rotation
+    add triangulation algorithm
+ */
 
 fn main() {
-    let mut points: Buffer = Buffer::init();
-    let camera = Camera::init(Point3d { x: (0.0), y: (0.0), z: (0.0) }, 1000, 1000, 120.0, 0.1, 5000.0);
-    let mut obj = Obj3d::init(
-        &[
-            Point3d::init(-0.5, -0.5, 0.13),
-            Point3d::init(-0.5, 0.5, 0.13),
-            Point3d::init(0.5, -0.5, 0.13),
-            Point3d::init(0.5, 0.5, 0.13),
+    let mut objs: ObjLoader = ObjLoader::init();
+    let a = objs.load_obj_file("o.obj");
+    println!("{:?}", a);
 
-            Point3d::init(-0.5, -0.5, 0.15),
-            Point3d::init(-0.5, 0.5, 0.15),
-            Point3d::init(0.5, -0.5, 0.15),
-            Point3d::init(0.5, 0.5, 0.1),
-            ],
-        &[
-                0, 1, 3, 2, 0,
-                4, 5, 7, 6, 4,
-                6, 2, 3, 7, 5, 1
-            ],
-            Color::RGB(255, 1, 1),
-            Color::RGB(1, 255, 1),
-            Color::RGB(1, 1, 255)
-    );
-    //points.load_obj_to_buffer(&obj, &camera);
-    println!("{:#?}", points);
-    
+    let camera = Camera::init(Point3::init(0.0, 0.0, 0.0, None ), 1000, 1000, 70.0, 0.1, 1000.0);
+    let mut points: Buffer;
+
     let sdl_context = sdl2::init().unwrap();
     let video_subsystem = sdl_context.video().unwrap();
 
@@ -47,13 +38,16 @@ fn main() {
         .build()
         .unwrap();
 
-    let mut canvas = window.into_canvas().build().unwrap();
+    let mut canvas: sdl2::render::Canvas<sdl2::video::Window> = window.into_canvas().build().unwrap();
 
     let mut event_pump = sdl_context.event_pump().unwrap();
-    let mut i = 0;
     'running: loop {
-        obj.rotate_z_axis(0.1);
-        points = Buffer::init();
+        //objs.0[0].rotate_y(1.0);
+
+        points = Buffer::init_buffer(&camera);
+        points.load_mesh(&objs.0[0]);
+        //points.load_mesh(&objs.0[1]);
+
         for event in event_pump.poll_iter() {
             match event {
                 Event::Quit { .. }
@@ -63,18 +57,16 @@ fn main() {
                 _ => {}
             }
         }
+        // clear canvas
         canvas.set_draw_color(Color::RGB(0, 0, 0));
         canvas.clear();
-        i = (i + 1) % 255;
-        canvas.set_draw_color(Color::RGB(i, 64, 255 - i));
-        let (w, h) = canvas.output_size().unwrap();
-        
-        points.load_obj_to_buffer(&obj, &camera);
+                        
         // For performance, it's probably better to draw a whole bunch of points at once
-        canvas.draw_triangle([points.points[0], points.points[1], points.points[2]]);
-        canvas.draw_lines_w(&points);
-        canvas.draw_points_w(&points);
-        //canvas.draw_points(points.points.as_slice()).unwrap();
+        canvas.draw_all(&points, &camera);
+        canvas.draw_triangles(&points, &camera);
+        canvas.draw_lines_w(&points, &camera);
+        canvas.draw_points_w(&points, &camera);
+        
         canvas.present();
         ::std::thread::sleep(Duration::new(0, 1_000_000_000u32 / 60)); // sloppy FPS limit
     }
