@@ -1,5 +1,5 @@
 use sdl2::render::Canvas;
-use std::f64::consts::PI;
+use std::f32::consts::PI;
 use std::str;
 use std::fs::File;
 use std::error::Error;
@@ -13,68 +13,65 @@ use sdl2::pixels::Color;
 use sdl2::rect::Point;
 use sdl2::video::Window;
 
-pub fn get_cross_product_f64(point1: &Point3, point2: &Point3) -> f64 {
-    point1.x * point2.x + point1.y * point2.y + point1.z + point2.z
-}
-
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub struct Point3 {
-    pub x: f64,
-    pub y: f64,
-    pub z: f64,
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
 }
 impl Point3 {
-    pub fn init(x: f64, y: f64, z: f64) -> Point3 {
+    pub fn init(x: f32, y: f32, z: f32) -> Point3 {
         Point3 { x: (x), y: (y), z: (z)}
     }    
 
-    fn project_point(point: Self, camera: &Camera) -> Option<Point> {
+    fn project_point(point: Self, camera: &Camera) -> Option<Point3> {
         // a = forward
         // b = right
         // c = up
         let perspective = [
-            1.0/((camera.width as f64/camera.height as f64)*f64::tan(camera.fov_radians as f64/2.0)),
-            1.0/f64::tan(camera.fov_radians as f64/2.0),
-            -((camera.far_clipping_plane+camera.near_clipping_plane)/(camera.far_clipping_plane-camera.near_clipping_plane)) as f64,
-            -((2.0*camera.far_clipping_plane*camera.near_clipping_plane)/(camera.far_clipping_plane-camera.near_clipping_plane)) as f64
+            1.0/((camera.width as f32/camera.height as f32)*f32::tan(camera.fov_radians/2.0)),
+            1.0/f32::tan(camera.fov_radians/2.0),
+            -((camera.far_clipping_plane+camera.near_clipping_plane)/(camera.far_clipping_plane-camera.near_clipping_plane)),
+            -((2.0*camera.far_clipping_plane*camera.near_clipping_plane)/(camera.far_clipping_plane-camera.near_clipping_plane))
         ];
 
-        let mut x: f64 = point.x-camera.origin_point.x;
-        let mut y: f64 = point.y-camera.origin_point.y;
-        let mut z: f64 = point.z-camera.origin_point.z;
-        let mut w: f64 = -z;
+        let x: f32 = point.x-camera.origin_point.x;
+        let y: f32 = point.y-camera.origin_point.y;
+        let z: f32 = point.z-camera.origin_point.z;
+        let w: f32 = -z;
         
-        let temp_x = x;
-        let temp_y = y;
-        let temp_z = z;
-        let temp_w = w;
+        //let temp_x = x;
+        //let temp_y = y;
+        //let temp_z = z;
+        //let temp_w = w;
 
         // checks if the point is behind the camera
-        if z < 0.0 {
+        if z < camera.near_clipping_plane || z > camera.far_clipping_plane {
             return None;
         }
-
-        x *= perspective[0];
-        y *= perspective[1];
-        z *= perspective[2] + perspective[3] * temp_z;
-
-        x /= w;
-        y /= w;
-
-        x *= camera.fov_radians as f64;
-        y *= camera.fov_radians as f64;
-
-        x *= camera.width as f64;
-        y *= camera.height as f64;
-
-        x += camera.width as f64/2.0;
-        y += camera.height as f64/2.0;
-
-        return Some(Point::new(x as i32, y as i32));
+        return Some(Point3::init(
+            x * perspective[0] / w * camera.fov_radians * camera.width as f32 + camera.width as f32/2.0,
+            y * perspective[1] / w * camera.fov_radians * camera.height as f32 + camera.height as f32/2.0,
+            w
+        ));
     }
 
-    pub fn calculate_distance(point1: &Self, point2: &Self) -> f64 {
-        f64::sqrt((point1.x-point2.x).powi(2) + (point1.y-point2.y).powi(2) + (point1.z-point2.z).powi(2))
+    pub fn calculate_distance(point1: &Self, point2: &Self) -> f32 {
+        f32::sqrt((point1.x-point2.x).powi(2) + (point1.y-point2.y).powi(2) + (point1.z-point2.z).powi(2))
+    }
+
+    pub fn get_dot_product(point1: &Point3, point2: &Point3) -> f32 {
+        point1.x * point2.x + point1.y * point2.y + point1.z + point2.z
+    }
+
+    pub fn normalize_vector(point: Point3) -> Point3 {
+        let m = (point.x.powi(2) + point.y.powi(2) + point.z.powi(2)).sqrt();
+
+        Point3 { 
+            x: (point.x/m),
+            y: (point.y/m),
+            z: (point.z/m)
+        }
     }
 }
 
@@ -89,90 +86,27 @@ pub struct Triangle {
 
     pub color: Option<Color>,
 }
-/*
-#[derive(Debug, Clone)]
-pub struct Polygon {
-    pub points: Vec<usize>,
-    pub triangles: Vec<Triangle>,
 
-    origin_point: Option<Point3>,
-    normal: Option<Point3>,
-
-    pub color: Option<Color>,
-}
-impl Polygon {
-    fn tri(points: &mut Vec<(Point3, usize)>, arr: &mut Vec<Triangle>, color: Option<Color>, start: isize, middle: isize, end: isize) {
-        if points.len() == 3 {
-            arr.push(Triangle { point1: points[0].1, point2: points[1].1, point3: points[2].1, origin_point: Some(calc_origin_point_triangle([points[0].0, points[1].0, points[2].0])), normal: Some(calc_normal([points[0].0, points[1].0, points[2].0])), color: color });
-            return;
+impl Triangle {
+    pub fn calc_origin_point_triangle(points: [Point3; 3]) -> Point3 {
+        Point3 { 
+            x: (points[0].x+points[1].x+points[2].x)/3.0,
+            y: (points[0].y+points[1].y+points[2].y)/3.0,
+            z: (points[0].z+points[1].z+points[2].z)/3.0
         }
-        
-        let p_0 = points[start as usize].0;
-        // angle to find
-        let p_1 = points[middle as usize].0;
-        let p_2 = points[end as usize].0;
-
-
-        let c_0 = Point3::calculate_distance(&p_1, &p_2);
-        let c_1 = Point3::calculate_distance(&p_1, &p_0);
-        let c_2 = Point3::calculate_distance(&p_0, &p_2);
-
-        let angle_0 = f64::acos((c_0.powi(2)+c_1.powi(2)-c_2.powi(2))/(2.0*c_0*c_2));
-
-        if angle_0 < 180.0 {
-            arr.push(Triangle { point1: points[start as usize].1, point2: points[middle as usize].1, point3: points[end as usize].1, origin_point: Some(calc_origin_point_triangle([points[start as usize].0, points[middle as usize].0, points[end as usize].0])), normal: Some(calc_normal([points[start as usize].0, points[middle as usize].0, points[end as usize].0])), color: color });
-            points.remove(middle as usize);
-            Polygon::tri(points, arr, color, start-1, middle, end);
-            return;
-        }
-        Polygon::tri(points, arr, color, middle, end, end+1);
     }
-
-    pub fn triangulate(&mut self, points: Vec<(Point3, usize)>) {
-        let l = points.len() as isize-1;
-        Polygon::tri(&mut points.clone(), &mut self.triangles, self.color, l, 0, 1);
+    
+    pub fn calc_normal(points: [Point3; 3]) -> Point3 {
+        let vu = Point3::init(points[1].x-points[0].x, points[1].y-points[0].y, points[1].z-points[0].z);
+        let vv = Point3::init(points[2].x-points[0].x, points[2].y-points[0].y, points[2].z-points[0].z);
+    
+        let a = Point3 {
+            x: (vu.y*vv.z) - (vu.z*vv.y),
+            y: (vu.z*vv.x) - (vu.x*vv.z),
+            z: (vu.x*vv.y) - (vu.y*vv.x)
+        };
+        Point3::normalize_vector(a)
     }
-
-    pub fn calc_origin_point(points: &[Point3]) -> Point3 {
-        let mut sum = Point3 {x: 0.0, y: 0.0, z: 0.0};
-        for i in points {
-            sum.x += i.x;
-            sum.y += i.y;
-            sum.z += i.z;
-        }
-        Point3 { x: sum.x/points.len() as f64, y: sum.y/points.len() as f64, z: sum.z/points.len() as f64 }
-    }
-}
-*/
-
-pub fn calc_origin_point_triangle(points: [Point3; 3]) -> Point3 {
-    Point3 { 
-        x: (points[0].x+points[1].x+points[2].x)/3.0,
-        y: (points[0].y+points[1].y+points[2].y)/3.0,
-        z: (points[0].z+points[1].z+points[2].z)/3.0
-    }
-}
-
-pub fn normalize_vector(point: Point3) -> Point3 {
-    let m = f64::sqrt(f64::powi(point.x, 2) + f64::powi(point.y, 2)+ f64::powi(point.z, 2));
-
-    Point3 { 
-        x: (point.x/m),
-        y: (point.y/m),
-        z: (point.z/m)
-    }
-}
-
-pub fn calc_normal(points: [Point3; 3]) -> Point3 {
-    let vu = Point3::init(points[1].x-points[0].x, points[1].y-points[0].y, points[1].z-points[0].z);
-    let vv = Point3::init(points[2].x-points[0].x, points[2].y-points[0].y, points[2].z-points[0].z);
-
-    let a = Point3 {
-        x: (vu.y*vv.z) - (vu.z*vv.y),
-        y: (vu.z*vv.x) - (vu.x*vv.z),
-        z: (vu.x*vv.y) - (vu.y*vv.x)
-    };
-    normalize_vector(a)
 }
 
 pub trait MeshAndBuffer {
@@ -187,12 +121,12 @@ pub struct Mesh {
     pub triangles: Vec<Triangle>,
 
     pub origin_point: Point3,
-    color: Option<Color>
+    pub color: Option<Color>
 }
 
 impl MeshAndBuffer for Mesh {
     fn sort_triangles_in_mesh_origin_point_z_distance_from_camera(&mut self, camera: &Camera) -> Result<(), ()> {
-        if self.triangles.len() == 0 {return Err(());}
+        if self.triangles.len() == 0 || self.triangles.len() == 1 {return Err(());}
         
         for i in 0..self.triangles.len() {
             self.triangles[i].origin_point.unwrap().x -= camera.origin_point.x;
@@ -200,7 +134,12 @@ impl MeshAndBuffer for Mesh {
             self.triangles[i].origin_point.unwrap().z -= camera.origin_point.z;
         }
 
-        self.triangles.sort_by(|a, b| a.origin_point.unwrap().z.partial_cmp(&b.origin_point.unwrap().z).unwrap());
+        for i in 1..self.triangles.len() {
+            if self.triangles[i-1].origin_point.unwrap().z > self.triangles[i].origin_point.unwrap().z {
+                self.triangles.sort_by(|a, b| a.origin_point.unwrap().z.partial_cmp(&b.origin_point.unwrap().z).unwrap());
+                break;
+            }
+        }
         
         for i in 0..self.triangles.len() {
             self.triangles[i].origin_point.unwrap().x += camera.origin_point.x;
@@ -210,6 +149,7 @@ impl MeshAndBuffer for Mesh {
         Ok(())
     }
 }
+
 impl Mesh {
     pub fn init(name: String, points: &[Point3], triangles: &[Triangle], color: Color) -> Mesh {
         let mut x = 0.0;
@@ -220,7 +160,7 @@ impl Mesh {
             y += i.y;
             z += i.z;
         }
-        let p = Point3 {x: (x/points.len() as f64), y: (y/points.len() as f64), z: (z/points.len() as f64)};
+        let p = Point3 {x: (x/points.len() as f32), y: (y/points.len() as f32), z: (z/points.len() as f32)};
         Mesh {name: (name), points: (points.to_vec()), triangles: (triangles.to_vec()), origin_point: (p), color: (Some(color))}
     }
 
@@ -231,13 +171,13 @@ impl Mesh {
             p.y += self.points[i].y;
             p.z += self.points[i].z;
         }
-        p.x /= self.points.len() as f64;
-        p.y /= self.points.len() as f64;
-        p.z /= self.points.len() as f64;
+        p.x /= self.points.len() as f32;
+        p.y /= self.points.len() as f32;
+        p.z /= self.points.len() as f32;
         self.origin_point = p;
     }
 
-    pub fn rotate_x(&mut self, mut angle: f64) {
+    pub fn rotate_x(&mut self, mut angle: f32) {
         angle *= PI/180.0;
         self.set_origin_point();
         for p in 0..self.points.len() {
@@ -247,8 +187,8 @@ impl Mesh {
             let y = self.points[p].y;
             let z = self.points[p].z;
 
-            self.points[p].y = y * f64::cos(angle) - z * f64::sin(angle);
-            self.points[p].z = y * f64:: sin(angle) + z * f64::cos(angle);
+            self.points[p].y = y * f32::cos(angle) - z * f32::sin(angle);
+            self.points[p].z = y * f32:: sin(angle) + z * f32::cos(angle);
 
             self.points[p].y += self.origin_point.y;
             self.points[p].z += self.origin_point.z;
@@ -257,7 +197,7 @@ impl Mesh {
         self.set_normals();
     }
 
-    pub fn rotate_y(&mut self, mut angle: f64) {
+    pub fn rotate_y(&mut self, mut angle: f32) {
         angle *= PI/180.0;
         self.set_origin_point();
         for p in 0..self.points.len() {
@@ -267,8 +207,8 @@ impl Mesh {
             let x = self.points[p].x;
             let z = self.points[p].z;
 
-            self.points[p].x = x * f64::cos(angle) + z * f64::sin(angle);
-            self.points[p].z = -(x * f64:: sin(angle)) + z * f64::cos(angle);
+            self.points[p].x = x * f32::cos(angle) + z * f32::sin(angle);
+            self.points[p].z = -(x * f32:: sin(angle)) + z * f32::cos(angle);
 
             self.points[p].x += self.origin_point.x;
             self.points[p].z += self.origin_point.z;
@@ -277,7 +217,7 @@ impl Mesh {
         self.set_normals();
     }
 
-    pub fn rotate_z(&mut self, mut angle: f64) {
+    pub fn rotate_z(&mut self, mut angle: f32) {
         angle *= PI/180.0;
 
         self.set_origin_point();
@@ -288,8 +228,8 @@ impl Mesh {
             let x = self.points[p].x;
             let y = self.points[p].y;
 
-            self.points[p].x = x * f64::cos(angle) - y * f64::sin(angle);
-            self.points[p].y = x * f64:: sin(angle) + y * f64::cos(angle);
+            self.points[p].x = x * f32::cos(angle) - y * f32::sin(angle);
+            self.points[p].y = x * f32:: sin(angle) + y * f32::cos(angle);
 
             self.points[p].x += self.origin_point.x;
             self.points[p].y += self.origin_point.y;
@@ -300,7 +240,7 @@ impl Mesh {
 
     pub fn set_normals(&mut self) {
         for i in 0..self.triangles.len() {
-            self.triangles[i].normal = Some(calc_normal([self.points[self.triangles[i].point1], self.points[self.triangles[i].point2], self.points[self.triangles[i].point3]]));
+            self.triangles[i].normal = Some(Triangle::calc_normal([self.points[self.triangles[i].point1], self.points[self.triangles[i].point2], self.points[self.triangles[i].point3]]));
         }
         /*
         for i in 0..self.polygons.len() {
@@ -328,7 +268,7 @@ impl Buffer {
             self.points.push(mesh.points[i]);
         }
         for i in 0..mesh.triangles.len() {
-            let l = calc_normal([mesh.points[mesh.triangles[i].point1], mesh.points[mesh.triangles[i].point2], mesh.points[mesh.triangles[i].point3]]);
+            let l = Triangle::calc_normal([mesh.points[mesh.triangles[i].point1], mesh.points[mesh.triangles[i].point2], mesh.points[mesh.triangles[i].point3]]);
             self.triangles.push(Triangle { point1: mesh.triangles[i].point1+self.amt_of_points, point2: mesh.triangles[i].point2+self.amt_of_points, point3: mesh.triangles[i].point3+self.amt_of_points, origin_point: mesh.triangles[i].origin_point, color: mesh.triangles[i].color, normal: Some(l) });
         }
         self.amt_of_points += mesh.points.len();
@@ -345,7 +285,7 @@ impl<'a> MeshAndBuffer for Buffer {
             self.triangles[i].origin_point.unwrap().z -= camera.origin_point.z;
         }
 
-        self.triangles.sort_by(|a, b| a.origin_point.unwrap().z.partial_cmp(&b.origin_point.unwrap().z).unwrap());
+        self.triangles.sort_by(|a, b| b.origin_point.unwrap().z.partial_cmp(&a.origin_point.unwrap().z).unwrap());
         
         for i in 0..self.triangles.len() {
             self.triangles[i].origin_point.unwrap().x += camera.origin_point.x;
@@ -354,6 +294,21 @@ impl<'a> MeshAndBuffer for Buffer {
         }
         Ok(())
     }
+}
+pub trait Lighting {
+    fn apply_basic_shading(color: Color, normal: Point3, light: Point3, coefficient: f32) -> Color {
+        let c = Point3::get_dot_product(&light, &normal);
+        Color { 
+            r: (color.r as f32 * c * coefficient).abs() as u8,
+            g: (color.g as f32 * c * coefficient).abs() as u8,
+            b: (color.b as f32 * c * coefficient).abs() as u8,
+            a: color.a
+        }
+    }
+}
+
+pub struct Light {
+    pub origin_point: Point3
 }
 
 #[derive(Debug, Clone)]
@@ -369,6 +324,8 @@ pub struct Camera {
     near_clipping_plane: f32,
     far_clipping_plane: f32,
 
+    z_depth_buffer: Vec<f32>,
+
     pub forward_vec: Point3,
     pub right_vec: Point3,
     pub up_vec: Point3,
@@ -376,7 +333,9 @@ pub struct Camera {
     pub target_vec: Point3,
 }
 
-impl Camera {
+impl<'a> Lighting for Camera {}
+
+impl<'a> Camera {
     pub fn init(origin_point: Point3, width: u32, height: u32, fov: f32, near_clipping_plane: f32, far_clipping_plane: f32) -> Camera {
         Camera { 
             origin_point: (origin_point),
@@ -386,15 +345,16 @@ impl Camera {
             fov_radians: (fov*PI as f32/180.0),
             near_clipping_plane: (near_clipping_plane),
             far_clipping_plane: (far_clipping_plane),
-            forward_vec: normalize_vector(Point3 { x: 0.0, y: 0.0, z: 1.0 }),
-            right_vec: normalize_vector(Point3 { x: -1.0, y: 0.0, z: 0.0 }),
-            up_vec: normalize_vector(Point3 { x: 0.0, y: 1.0, z: 0.0 }),
-            look_vec: normalize_vector(Point3 { x: 0.0, y: 0.0, z: 1.0 }),
-            target_vec: normalize_vector(Point3 { x: 0.0, y: 0.0, z: 1.0 }),
+            z_depth_buffer: vec![far_clipping_plane; width as usize * height as usize],
+            forward_vec: Point3::normalize_vector(Point3 { x: 0.0, y: 0.0, z: 1.0 }),
+            right_vec: Point3::normalize_vector(Point3 { x: -1.0, y: 0.0, z: 0.0 }),
+            up_vec: Point3::normalize_vector(Point3 { x: 0.0, y: 1.0, z: 0.0 }),
+            look_vec: Point3::normalize_vector(Point3 { x: 0.0, y: 0.0, z: 1.0 }),
+            target_vec: Point3::normalize_vector(Point3 { x: 0.0, y: 0.0, z: 1.0 }),
         }
     }
 
-    pub fn move_camera(&mut self, x: f64, y: f64, z: f64) {
+    pub fn move_camera(&mut self, x: f32, y: f32, z: f32) {
         self.origin_point.x += x;
         self.origin_point.y += y;
         self.origin_point.z += z;
@@ -447,7 +407,7 @@ impl ObjLoader {
                         (self.0[obj_len-1].points[p_1 as usize].z + self.0[obj_len-1].points[p_2 as usize].z + self.0[obj_len-1].points[p_2 as usize].z)/3.0
                     );
                     let l = self.0[obj_len-1].color;
-                    let n = calc_normal([self.0[obj_len-1].points[p_1 as usize], self.0[obj_len-1].points[p_2 as usize], self.0[obj_len-1].points[p_3 as usize]]);
+                    let n = Triangle::calc_normal([self.0[obj_len-1].points[p_1 as usize], self.0[obj_len-1].points[p_2 as usize], self.0[obj_len-1].points[p_3 as usize]]);
                     self.0[obj_len-1].triangles.push(Triangle { point1: (p_1 as usize), point2: (p_2 as usize), point3: (p_3 as usize), origin_point: Some(p), color: (l), normal: Some(n) });
                 }
             }
@@ -457,27 +417,30 @@ impl ObjLoader {
 }
 
 pub trait SdlWrapper {
-    fn draw_lines_w(&mut self, buffer: &mut Buffer, camera: &Camera);
+    fn draw_lines_w(&mut self, buffer: &mut Buffer, camera: &Camera) -> Result<(), ()>;
     
-    fn draw_triangle(&mut self, points: [Point; 3]);
-    fn draw_triangles(&mut self, buffer: &mut Buffer, camera: &Camera);
+    fn draw_triangle(&mut self, points: [Point3; 3], camera: &mut Camera);
+    fn draw_triangles(&mut self, buffer: &mut Buffer, camera: &mut Camera) -> Result<(), ()>;
 
     fn draw_all(&mut self, buffer: &mut Buffer, camera: &Camera);
 
-    fn check_backface_culling(points: [Point3; 3], normal: Point3, camera: &Camera) -> bool;
+    fn check_backface_culling(points: [Point3; 3], normal: Point3, camera: &Camera) -> bool {
+        normal.x * (points[0].x - camera.origin_point.x) +
+        normal.y * (points[0].y - camera.origin_point.y) +
+        normal.z * (points[0].z - camera.origin_point.z) > 0.0
+    }
 }
 
 impl SdlWrapper for Canvas<Window> {
-    
-    fn draw_lines_w(&mut self, buffer: &mut Buffer, camera: &Camera) {
+    fn draw_lines_w(&mut self, buffer: &mut Buffer, camera: &Camera) -> Result<(), ()> {
+        let check = buffer.sort_triangles_in_mesh_origin_point_z_distance_from_camera(camera);
+        if check == Err(()) {return Err(());}
         self.set_draw_color(Color::RGB(255, 255, 255));
-        buffer.sort_triangles_in_mesh_origin_point_z_distance_from_camera(camera);
 
         for i in 0..buffer.triangles.len() {
-            // TODO: fix unwrap
-            if buffer.triangles[i].normal.unwrap().x * (buffer.points[buffer.triangles[i].point1].x - camera.origin_point.x) +
-               buffer.triangles[i].normal.unwrap().y * (buffer.points[buffer.triangles[i].point1].y - camera.origin_point.y) +
-               buffer.triangles[i].normal.unwrap().z * (buffer.points[buffer.triangles[i].point1].z - camera.origin_point.z) > 0.0
+            if buffer.triangles[i].normal == None {return Err(());}
+
+            if Canvas::check_backface_culling([buffer.points[buffer.triangles[i].point1], buffer.points[buffer.triangles[i].point2], buffer.points[buffer.triangles[i].point3]], buffer.triangles[i].normal.unwrap(), camera)
             {
                 continue;
             }            
@@ -489,13 +452,14 @@ impl SdlWrapper for Canvas<Window> {
                 continue;
             }
 
-            self.draw_line(p1.unwrap(), p2.unwrap()).unwrap();
-            self.draw_line(p1.unwrap(), p3.unwrap()).unwrap();
-            self.draw_line(p2.unwrap(), p3.unwrap()).unwrap();
+            self.draw_line(Point::new(p1.unwrap().x as i32, p1.unwrap().y as i32), Point::new(p2.unwrap().x as i32, p2.unwrap().y as i32)).unwrap();
+            self.draw_line(Point::new(p1.unwrap().x as i32, p1.unwrap().y as i32), Point::new(p3.unwrap().x as i32, p3.unwrap().y as i32)).unwrap();
+            self.draw_line(Point::new(p2.unwrap().x as i32, p2.unwrap().y as i32), Point::new(p3.unwrap().x as i32, p3.unwrap().y as i32)).unwrap();
         }
+        Ok(())
     }
 
-    fn draw_triangle(&mut self, points_: [Point; 3]) {
+    fn draw_triangle(&mut self, points_: [Point3; 3], camera: &mut Camera) {
         let mut points = points_;
 
         if points[1].y < points[0].y {points.swap(0, 1)};
@@ -506,34 +470,33 @@ impl SdlWrapper for Canvas<Window> {
         let m_0_1;
         let m_1_2;
 
-        if points[2].x as f32-points[0].x as f32 != 0.0 {
-            m_0_2 = (points[2].y as f32-points[0].y as f32)/(points[2].x as f32-points[0].x as f32);
+        if points[2].x-points[0].x != 0.0 {
+            m_0_2 = (points[2].y-points[0].y)/(points[2].x-points[0].x);
         }
         else {
-            m_0_2 = (points[2].y as f32-points[0].y as f32)/(0.1);
+            m_0_2 = (points[2].y-points[0].y)/(0.1);
         }
 
-        if points[1].x as f32-points[0].x as f32 != 0.0 {
-            m_0_1 = (points[1].y as f32-points[0].y as f32)/(points[1].x as f32-points[0].x as f32);
+        if points[1].x-points[0].x != 0.0 {
+            m_0_1 = (points[1].y-points[0].y)/(points[1].x-points[0].x);
         }
         else {
-            m_0_1 = (points[1].y as f32-points[0].y as f32)/(0.1);
+            m_0_1 = (points[1].y-points[0].y)/(0.1);
         }
 
-        if points[2].x as f32-points[1].x as f32 != 0.0 {
-            m_1_2 = (points[2].y as f32-points[1].y as f32)/(points[2].x as f32-points[1].x as f32);
+        if points[2].x-points[1].x != 0.0 {
+            m_1_2 = (points[2].y-points[1].y)/(points[2].x-points[1].x);
         }
         else {
-            m_1_2 = (points[2].y as f32-points[1].y as f32)/(0.1);
+            m_1_2 = (points[2].y-points[1].y)/(0.1);
         }
-        
 
-        let b_0_2 = points[0].y as f32 - m_0_2 * points[0].x as f32;
-        let b_0_1 = points[0].y as f32 - m_0_1 * points[0].x as f32;
-        let b_1_2 = points[1].y as f32 - m_1_2 * points[1].x as f32;
+        let b_0_2 = points[0].y - m_0_2 * points[0].x;
+        let b_0_1 = points[0].y - m_0_1 * points[0].x;
+        let b_1_2 = points[1].y - m_1_2 * points[1].x;
 
-        for y in points[0].y+1..=points[2].y {
-            if y <= points[1].y {
+        for y in points[0].y as i32+1..=points[2].y as i32 {
+            if y <= points[1].y as i32 {
                 let left_x = -((b_0_1-y as f32)/m_0_1);
                 let right_x = -((b_0_2-y as f32)/m_0_2);
                 self.draw_line(Point::new(left_x as i32, y), Point::new(right_x as i32, y)).unwrap(); 
@@ -546,47 +509,27 @@ impl SdlWrapper for Canvas<Window> {
         }
     }
 
-    fn draw_triangles(&mut self, buffer: &mut Buffer, camera: &Camera) {
-        buffer.sort_triangles_in_mesh_origin_point_z_distance_from_camera(camera);
+    fn draw_triangles(&mut self, buffer: &mut Buffer, camera: &mut Camera) -> Result<(), ()> {
+        //let check = buffer.sort_triangles_in_mesh_origin_point_z_distance_from_camera(camera);
+        //if check == Err(()) {return Err(());}
+
         for t in 0..buffer.triangles.len() {
-            // TODO: fix unwrap
+            if buffer.triangles[t].normal == None {
+                return Err(());
+            }
+
             if Canvas::check_backface_culling([buffer.points[buffer.triangles[t].point1], buffer.points[buffer.triangles[t].point2], buffer.points[buffer.triangles[t].point3]], buffer.triangles[t].normal.unwrap(), camera) {
                 continue;
             }
             
             if buffer.triangles[t].color == None {
-                // TODO: fix unwrap
-                let mut r = 180 as f64 + (buffer.triangles[t].normal.unwrap().x + buffer.triangles[t].normal.unwrap().y + buffer.triangles[t].normal.unwrap().z);
-                let mut g = 180 as f64 + (buffer.triangles[t].normal.unwrap().x + buffer.triangles[t].normal.unwrap().y + buffer.triangles[t].normal.unwrap().z);
-                let mut buffer = 180 as f64 + (buffer.triangles[t].normal.unwrap().x + buffer.triangles[t].normal.unwrap().y + buffer.triangles[t].normal.unwrap().z);
-                
-                if f64::abs(r) > 255.0 {
-                    r = 180.0;
-                }
-                if f64::abs(g) > 255.0 {
-                    g = 180.0;
-                }
-                if f64::abs(buffer) > 255.0 {
-                    buffer = 180.0;
-                }
-                self.set_draw_color(Color::RGB(f64::abs(r) as u8, f64::abs(g) as u8, f64::abs(buffer) as u8));
+                let color = Camera::apply_basic_shading(Color::RGB(180, 180, 180), buffer.triangles[t].normal.unwrap(), camera.origin_point, 1.0);
+                self.set_draw_color(color);
             }
             else {
-                let mut r = buffer.triangles[t].color.unwrap().r as f64 * (buffer.triangles[t].normal.unwrap().x + buffer.triangles[t].normal.unwrap().y + buffer.triangles[t].normal.unwrap().z);
-                let mut g = buffer.triangles[t].color.unwrap().g as f64 * (buffer.triangles[t].normal.unwrap().x + buffer.triangles[t].normal.unwrap().y + buffer.triangles[t].normal.unwrap().z);
-                let mut b = buffer.triangles[t].color.unwrap().b as f64 * (buffer.triangles[t].normal.unwrap().x + buffer.triangles[t].normal.unwrap().y + buffer.triangles[t].normal.unwrap().z);
+                let color = Camera::apply_basic_shading(buffer.triangles[t].color.unwrap(), buffer.triangles[t].normal.unwrap(), camera.origin_point, 1.0);
+                self.set_draw_color(color);
                 
-                if f64::abs(r) > 255.0 {
-                    r = 240.0;
-                }
-                if f64::abs(g) > 255.0 {
-                    g = 240.0;
-                }
-                if f64::abs(b) > 255.0 {
-                    b = 240.0;
-                }
-                
-                self.set_draw_color(Color::RGB(f64::abs(r) as u8, f64::abs(g) as u8, f64::abs(b) as u8));
             }
             let p1 = Point3::project_point(buffer.points[buffer.triangles[t].point1], camera);
             let p2 = Point3::project_point(buffer.points[buffer.triangles[t].point2], camera);
@@ -596,16 +539,10 @@ impl SdlWrapper for Canvas<Window> {
                 continue;
             }
 
-            self.draw_triangle([p1.unwrap(), p2.unwrap(), p3.unwrap()]);
-            //self.present();
-            //::std::thread::sleep(Duration::new(0, 1_000_000_00u32)); // sloppy FPS limit
+            self.draw_triangle([p1.unwrap(), p2.unwrap(), p3.unwrap()], camera);
         }
-    }
-
-    fn check_backface_culling(points: [Point3; 3], normal: Point3, camera: &Camera) -> bool {
-        normal.x * (points[0].x - camera.origin_point.x) +
-        normal.y * (points[0].y - camera.origin_point.y) +
-        normal.z * (points[0].z - camera.origin_point.z) > 0.0
+        camera.z_depth_buffer = vec![camera.far_clipping_plane; camera.width as usize * camera.height as usize];
+        Ok(())
     }
 
     fn draw_all(&mut self, buffer: &mut Buffer, camera: &Camera) {
