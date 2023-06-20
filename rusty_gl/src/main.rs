@@ -8,16 +8,13 @@ use crate::rusty_gl::*;
 
 /*
     TODO:
+    refactor (a lot of things in one object depend on different objects which can create problems in the future when trying to add new features)
     add depth buffer
-    fix clipping
     add console interface
     add gui
     add camera rotation
-    add triangulation algorithm
-    add support for more polygons
-    refactor (a lot of things in one object depend on different objects which can create problems in the future when trying to add new features)
-    combine Polygon and Triangle to GeneralPolygon
-    make better sorting algoirthm
+    add lighting system
+    fix clippings
  */
 /*
     axis relative to blender:
@@ -25,15 +22,19 @@ use crate::rusty_gl::*;
 
  */
 /*
-    coding rules:
-    if youre gonna make a constructor for readbillity you have to include all parameters, or if there are private parameters that have to be initilliazed.
+    what cant you do?
+    create animations
+    create events
+    create movement
+    create games
  */
 
 fn main() {
+    /*
     let mut objs: ObjLoader = ObjLoader {0: Vec::new()};
-    objs.load_obj_file("plane.obj");
+    objs.load_obj_file("amongus.obj").unwrap();
 
-    let mut camera = Camera::init(Point3::init(0.0, 0.0, 0.0 ), 1000, 1000, 120.0, 1.0, 1000.0);
+    let mut camera = Camera::init(Point3::init(0.0, 0.0, 0.0 ), 1000, 1000, 120.0, 1.0, 100.0);
     camera.move_camera(0.0, 0.0, 0.0);
     let mut points: Buffer;
 
@@ -50,6 +51,7 @@ fn main() {
 
     let mut event_pump = sdl_context.event_pump().unwrap();
     'running: loop {
+        //camera.move_camera(0.0, 0.0, 0.1);
         objs.0[0].rotate_y(0.5);
 
         points = Buffer {amt_of_points: 0, points: Vec::new(), triangles: Vec::new()};
@@ -71,10 +73,11 @@ fn main() {
                         
         // For performance, it's probably better to draw a whole bunch of points at once
         //canvas.draw_all(&points, &camera);
-        canvas.draw_triangles(&mut points, &camera);
+        canvas.draw_triangles(&mut points, &mut camera).unwrap();
         //canvas.draw_lines_w(&mut points, &camera);
         
         canvas.present();
         ::std::thread::sleep(Duration::new(0, 1_000_000_000u32 / 60)); // sloppy FPS limit
     }
+    */
 }
