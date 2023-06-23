@@ -24,15 +24,16 @@ use crate::rusty_gl::*;
 /*
     what cant you do?
     create animations
-    create events
-    create movement
     create games
  */
 
 fn main() {
-    /*
+    let lights = vec![
+        Light::Point(PointLight { origin_point: Point3 { x: 1.0, y: 0.0, z: 1.0 }, brightness: 2.0, color: Color { r: 1, g: 0, b: 255, a: 255 } }),
+        //Light::Point(PointLight { origin_point: Point3 { x: -1.0, y: 0.0, z: 1.0 }, brightness: 1.0, color: Color { r: 255, g: 0, b: 0, a: 255 } }),
+    ];
     let mut objs: ObjLoader = ObjLoader {0: Vec::new()};
-    objs.load_obj_file("amongus.obj").unwrap();
+    objs.load_obj_file("sphere.obj").unwrap();
 
     let mut camera = Camera::init(Point3::init(0.0, 0.0, 0.0 ), 1000, 1000, 120.0, 1.0, 100.0);
     camera.move_camera(0.0, 0.0, 0.0);
@@ -73,11 +74,10 @@ fn main() {
                         
         // For performance, it's probably better to draw a whole bunch of points at once
         //canvas.draw_all(&points, &camera);
-        canvas.draw_triangles(&mut points, &mut camera).unwrap();
+        canvas.draw_triangles(&mut points, &mut camera, &lights).unwrap();
         //canvas.draw_lines_w(&mut points, &camera);
         
         canvas.present();
         ::std::thread::sleep(Duration::new(0, 1_000_000_000u32 / 60)); // sloppy FPS limit
     }
-    */
 }
