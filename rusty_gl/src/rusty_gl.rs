@@ -73,6 +73,16 @@ impl Point3 {
             z: (point.z/m)
         }
     }
+
+    fn apply_basic_shading(color: Color, normal: &Point3, light: &Point3, coefficient: f32) -> Color {
+        let c = Point3::get_dot_product(normal, light);
+        Color { 
+            r: (color.r as f32 * c * coefficient).abs() as u8,
+            g: (color.g as f32 * c * coefficient).abs() as u8,
+            b: (color.b as f32 * c * coefficient).abs() as u8,
+            a: color.a
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -242,16 +252,6 @@ impl Mesh {
         for i in 0..self.triangles.len() {
             self.triangles[i].normal = Some(Triangle::calc_normal([self.points[self.triangles[i].point1], self.points[self.triangles[i].point2], self.points[self.triangles[i].point3]]));
         }
-        /*
-        for i in 0..self.polygons.len() {
-            let mut n = Point3 {x: 0.0, y: 0.0, z: 0.0};
-            for j in 0..self.polygons[i].points.len()-1 {
-                n.x += self.points[self.polygons[i].points[j]].x * self.points[self.polygons[i].points[j+1]].x + self.points[self.polygons[i].points[j]].x * self.points[self.polygons[i].points[j+1]].y + self.points[self.polygons[i].points[j]].x * self.points[self.polygons[i].points[j+1]].z;
-                n.y += self.points[self.polygons[i].points[j]].y * self.points[self.polygons[i].points[j+1]].x + self.points[self.polygons[i].points[j]].y * self.points[self.polygons[i].points[j+1]].y + self.points[self.polygons[i].points[j]].y * self.points[self.polygons[i].points[j+1]].z;
-                n.z += self.points[self.polygons[i].points[j]].z * self.points[self.polygons[i].points[j+1]].x + self.points[self.polygons[i].points[j]].z * self.points[self.polygons[i].points[j+1]].y + self.points[self.polygons[i].points[j]].z * self.points[self.polygons[i].points[j+1]].z;
-            }
-        }
-        */
     }
 }
 
@@ -295,20 +295,98 @@ impl<'a> MeshAndBuffer for Buffer {
         Ok(())
     }
 }
+
 pub trait Lighting {
-    fn apply_basic_shading(color: Color, normal: Point3, light: Point3, coefficient: f32) -> Color {
-        let c = Point3::get_dot_product(&light, &normal);
-        Color { 
-            r: (color.r as f32 * c * coefficient).abs() as u8,
-            g: (color.g as f32 * c * coefficient).abs() as u8,
-            b: (color.b as f32 * c * coefficient).abs() as u8,
-            a: color.a
-        }
+    fn to_light(&self) -> Light;
+}
+impl Lighting for Point3 {
+    fn to_light(&self) -> Light {
+        Light::Point(
+            PointLight  { 
+                origin_point: Point3 { x: self.x, y: self.y, z: self.z },
+                brightness: 1.0,
+                color: Color { r: 255, g: 255, b: 255, a: 255 } 
+            }
+        )
+    }
+}
+impl Lighting for Camera {
+    fn to_light(&self) -> Light {
+        Light::Point(
+            PointLight  { 
+                origin_point: self.origin_point,
+                brightness: 1.0,
+                color: Color { r: 255, g: 255, b: 255, a: 255 } 
+            }
+        )
     }
 }
 
-pub struct Light {
-    pub origin_point: Point3
+pub struct PointLight {
+    pub origin_point: Point3,
+    pub brightness: f32,
+    pub color: Color,
+}
+
+pub enum Light {
+    Point(PointLight),
+}
+
+impl Light {
+    fn convert_255_1(color: &Color) -> (f32, f32, f32, f32) {
+        (
+            color.r as f32 / 255.0,
+            color.g as f32 / 255.0,
+            color.b as f32 / 255.0,
+            color.a as f32 / 255.0,
+        )
+    }
+
+    fn convert_1_255(color: &(f32, f32, f32, f32)) -> Color {
+        Color { 
+            r: (color.0 * 255.0) as u8,
+            g: (color.1 * 255.0) as u8,
+            b: (color.2 * 255.0) as u8,
+            a: (color.3 * 255.0) as u8
+        }
+    }
+    //TODO: fix overflow risk
+    fn apply_shading_multiple_lights(color: &Color, normal: &Point3, lights: &[Light]) -> Color {
+        let mut c = Light::convert_255_1(color);
+
+        for i in lights {
+            let temp = Light::convert_255_1(&Light::apply_shading(color, normal, i));
+            c.0 += temp.0;
+            c.1 += temp.1;
+            c.2 += temp.2;
+        }
+        
+        
+        Light::convert_1_255(&c)
+    }
+
+    fn apply_shading(color: &Color, normal: &Point3, light: &Light) -> Color {
+        match light {
+            Light::Point(x) => return Light::apply_shading_point(color, normal, x)
+        }
+    }
+
+    fn apply_shading_point(color: &Color, normal: &Point3, light: &PointLight) -> Color {
+        let c = Point3::get_dot_product(normal, &light.origin_point);
+
+        let converted_color = Light::convert_255_1(&color);
+        let converted_light = Light::convert_255_1(&light.color);
+
+        let d = ((normal.x-light.origin_point.x).powi(2) + (normal.y-light.origin_point.y).powi(2) + (normal.z-light.origin_point.z).powi(2)).sqrt();
+
+        let c = ( 
+            converted_color.0 * converted_light.0 * (c/d.powi(2)) * light.brightness,
+            converted_color.1 * converted_light.1 * (c/d.powi(2)) * light.brightness,
+            converted_color.2 * converted_light.2 * (c/d.powi(2)) * light.brightness,
+            converted_color.3,
+        );
+        Light::convert_1_255(&c)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -332,8 +410,6 @@ pub struct Camera {
     pub look_vec: Point3,
     pub target_vec: Point3,
 }
-
-impl<'a> Lighting for Camera {}
 
 impl<'a> Camera {
     pub fn init(origin_point: Point3, width: u32, height: u32, fov: f32, near_clipping_plane: f32, far_clipping_plane: f32) -> Camera {
@@ -420,7 +496,7 @@ pub trait SdlWrapper {
     fn draw_lines_w(&mut self, buffer: &mut Buffer, camera: &Camera) -> Result<(), ()>;
     
     fn draw_triangle(&mut self, points: [Point3; 3], camera: &mut Camera);
-    fn draw_triangles(&mut self, buffer: &mut Buffer, camera: &mut Camera) -> Result<(), ()>;
+    fn draw_triangles(&mut self, buffer: &mut Buffer, camera: &mut Camera, lights: &[Light]) -> Result<(), ()>;
 
     fn draw_all(&mut self, buffer: &mut Buffer, camera: &Camera);
 
@@ -509,7 +585,7 @@ impl SdlWrapper for Canvas<Window> {
         }
     }
 
-    fn draw_triangles(&mut self, buffer: &mut Buffer, camera: &mut Camera) -> Result<(), ()> {
+    fn draw_triangles(&mut self, buffer: &mut Buffer, camera: &mut Camera, lights: &[Light]) -> Result<(), ()> {
         //let check = buffer.sort_triangles_in_mesh_origin_point_z_distance_from_camera(camera);
         //if check == Err(()) {return Err(());}
 
@@ -523,12 +599,23 @@ impl SdlWrapper for Canvas<Window> {
             }
             
             if buffer.triangles[t].color == None {
-                let color = Camera::apply_basic_shading(Color::RGB(180, 180, 180), buffer.triangles[t].normal.unwrap(), camera.origin_point, 1.0);
-                self.set_draw_color(color);
+                if lights.is_empty() == false {
+                    let mut color = Color { r: 180, g: 180, b: 180, a: 255 };
+                    color = Light::apply_shading_multiple_lights(&color, &buffer.triangles[t].normal.unwrap(), lights);
+                    self.set_draw_color(color);
+                }
+                else {
+                    self.set_draw_color(buffer.triangles[t].color.unwrap());
+                }
             }
             else {
-                let color = Camera::apply_basic_shading(buffer.triangles[t].color.unwrap(), buffer.triangles[t].normal.unwrap(), camera.origin_point, 1.0);
-                self.set_draw_color(color);
+                if lights.is_empty() == false {
+                    let color = Light::apply_shading_multiple_lights(&buffer.triangles[t].color.unwrap(), &buffer.triangles[t].normal.unwrap(), lights);
+                    self.set_draw_color(color);
+                }
+                else {
+                    self.set_draw_color(buffer.triangles[t].color.unwrap());
+                }
                 
             }
             let p1 = Point3::project_point(buffer.points[buffer.triangles[t].point1], camera);
