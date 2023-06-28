@@ -1,17 +1,25 @@
 use sdl2::render::Canvas;
+use std::collections::btree_map::Iter;
 use std::f32::consts::PI;
 use std::str;
 use std::fs::File;
 use std::error::Error;
 use std::io::BufReader;
 use std::io::BufRead;
-use std::sync::Arc;
-use std::time::Duration;
 
 use sdl2;
 use sdl2::pixels::Color;
 use sdl2::rect::Point;
 use sdl2::video::Window;
+
+pub enum LightingMode {
+    PerPixel,
+    PerTriangle,
+}
+
+pub struct RustyGl {
+    lighting_mode: LightingMode,
+}
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub struct Point3 {
@@ -20,9 +28,53 @@ pub struct Point3 {
     pub z: f32,
 }
 impl Point3 {
-    pub fn init(x: f32, y: f32, z: f32) -> Point3 {
-        Point3 { x: (x), y: (y), z: (z)}
-    }    
+    pub fn rotate_x_around_point_degrees(point: &mut Point3, origin_point: &Point3, angle: f32) {
+        let a =angle*PI/180.0;
+        
+        point.y -= origin_point.y;
+        point.z -= origin_point.z;
+
+        let y = point.y;
+        let z = point.z;
+
+        point.y = y * a.cos() - z*a.sin();
+        point.z = z * a.sin() + z * a.cos();
+
+        point.y += origin_point.y;
+        point.z += origin_point.z;
+            }
+
+    pub fn rotate_y_around_point_degrees(point: &mut Point3, origin_point: &Point3, angle: f32) {
+        let a = angle*PI/180.0;
+
+        point.x -= origin_point.x;
+        point.z -= origin_point.z;
+
+        let x = point.x;
+        let z = point.z;
+
+        point.x = x * a.cos() + z * a.sin();
+        point.z = -(x * a.sin()) + z * a.cos();
+
+        point.x += origin_point.x;
+        point.z += origin_point.z;
+    }
+
+    pub fn rotate_z_around_point_degrees(point: &mut Point3, origin_point: &Point3, angle: f32) {
+        let a = angle*PI/180.0;
+
+        point.x -= origin_point.x;
+        point.y -= origin_point.y;
+
+        let x = point.x;
+        let y = point.y;
+
+        point.x = x * a.cos() - y * a.sin();
+        point.y = x * a.sin() + y * a.cos();
+
+        point.x -= origin_point.x;
+        point.y -= origin_point.y;
+    }
 
     fn project_point(point: Self, camera: &Camera) -> Option<Point3> {
         // a = forward
@@ -35,25 +87,38 @@ impl Point3 {
             -((2.0*camera.far_clipping_plane*camera.near_clipping_plane)/(camera.far_clipping_plane-camera.near_clipping_plane))
         ];
 
-        let x: f32 = point.x-camera.origin_point.x;
-        let y: f32 = point.y-camera.origin_point.y;
-        let z: f32 = point.z-camera.origin_point.z;
-        let w: f32 = -z;
+        let mut x: f32 = point.x;
+        let mut y: f32 = point.y;
+        let mut z: f32 = point.z;
         
         //let temp_x = x;
         //let temp_y = y;
         //let temp_z = z;
         //let temp_w = w;
 
-        // checks if the point is behind the camera
+        let mut temp = Point3 { x: x, y: y, z: z };
+        Point3::rotate_x_around_point_degrees(&mut temp, &camera.origin_point, camera.rotations.0);
+        Point3::rotate_y_around_point_degrees(&mut temp, &camera.origin_point, camera.rotations.1);
+        Point3::rotate_z_around_point_degrees(&mut temp, &camera.origin_point, camera.rotations.2);
+
+        x = temp.x-camera.origin_point.x;
+        y = temp.y-camera.origin_point.y;
+        z = temp.z-camera.origin_point.z;
+        let w = -z;
+
         if z < camera.near_clipping_plane || z > camera.far_clipping_plane {
             return None;
         }
-        return Some(Point3::init(
-            x * perspective[0] / w * camera.fov_radians * camera.width as f32 + camera.width as f32/2.0,
-            y * perspective[1] / w * camera.fov_radians * camera.height as f32 + camera.height as f32/2.0,
-            w
-        ));
+
+        let a = Point3 {
+            x: x * perspective[0] / w * camera.fov_radians * camera.width as f32 + camera.width as f32/2.0,
+            y: y * perspective[1] / w * camera.fov_radians * camera.height as f32 + camera.height as f32/2.0,
+            z: w
+        };
+
+        
+
+        Some(a)
     }
 
     pub fn calculate_distance(point1: &Self, point2: &Self) -> f32 {
@@ -74,13 +139,18 @@ impl Point3 {
         }
     }
 
-    fn apply_basic_shading(color: Color, normal: &Point3, light: &Point3, coefficient: f32) -> Color {
-        let c = Point3::get_dot_product(normal, light);
-        Color { 
-            r: (color.r as f32 * c * coefficient).abs() as u8,
-            g: (color.g as f32 * c * coefficient).abs() as u8,
-            b: (color.b as f32 * c * coefficient).abs() as u8,
-            a: color.a
+    pub fn calc_origin_point(points: &[Point3]) -> Point3 {
+        let mut temp = Point3 {x: 0.0, y: 0.0, z: 0.0};
+        points.iter().for_each(|a| {
+            temp.x += a.x;
+            temp.y += a.y;
+            temp.z += a.z;
+        });
+        
+        Point3 { 
+            x: temp.x/points.len() as f32, 
+            y: temp.y/points.len() as f32, 
+            z: temp.z/points.len() as f32 
         }
     }
 }
@@ -98,17 +168,9 @@ pub struct Triangle {
 }
 
 impl Triangle {
-    pub fn calc_origin_point_triangle(points: [Point3; 3]) -> Point3 {
-        Point3 { 
-            x: (points[0].x+points[1].x+points[2].x)/3.0,
-            y: (points[0].y+points[1].y+points[2].y)/3.0,
-            z: (points[0].z+points[1].z+points[2].z)/3.0
-        }
-    }
-    
     pub fn calc_normal(points: [Point3; 3]) -> Point3 {
-        let vu = Point3::init(points[1].x-points[0].x, points[1].y-points[0].y, points[1].z-points[0].z);
-        let vv = Point3::init(points[2].x-points[0].x, points[2].y-points[0].y, points[2].z-points[0].z);
+        let vu = Point3 {x: points[1].x-points[0].x,y: points[1].y-points[0].y,z: points[1].z-points[0].z};
+        let vv = Point3 {x: points[2].x-points[0].x,y: points[2].y-points[0].y,z: points[2].z-points[0].z};
     
         let a = Point3 {
             x: (vu.y*vv.z) - (vu.z*vv.y),
@@ -131,56 +193,74 @@ pub struct Mesh {
     pub triangles: Vec<Triangle>,
 
     pub origin_point: Point3,
-    pub color: Option<Color>
 }
 
 impl MeshAndBuffer for Mesh {
     fn sort_triangles_in_mesh_origin_point_z_distance_from_camera(&mut self, camera: &Camera) -> Result<(), ()> {
-        if self.triangles.len() == 0 || self.triangles.len() == 1 {return Err(());}
+        if self.triangles.len() == 0 {return Err(());}
         
-        for i in 0..self.triangles.len() {
-            self.triangles[i].origin_point.unwrap().x -= camera.origin_point.x;
-            self.triangles[i].origin_point.unwrap().y -= camera.origin_point.y;
-            self.triangles[i].origin_point.unwrap().z -= camera.origin_point.z;
+        let check = self.triangles.iter_mut()
+            .try_for_each(|a| -> Result<(), ()> { 
+                if a.origin_point == None {return Err(());}
+                
+                a.origin_point = 
+                Some(
+                    Point3 {
+                    x: a.origin_point.unwrap().x-camera.origin_point.x,
+                    y: a.origin_point.unwrap().y-camera.origin_point.y,
+                    z: a.origin_point.unwrap().z-camera.origin_point.z
+                    }
+                ); 
+                Ok(())}
+            );
+        if check == Err(()) {
+            return Err(());
         }
 
-        for i in 1..self.triangles.len() {
-            if self.triangles[i-1].origin_point.unwrap().z > self.triangles[i].origin_point.unwrap().z {
-                self.triangles.sort_by(|a, b| a.origin_point.unwrap().z.partial_cmp(&b.origin_point.unwrap().z).unwrap());
-                break;
-            }
-        }
+        self.triangles.sort_by(|a, b| b.origin_point.unwrap().z.partial_cmp(&a.origin_point.unwrap().z).unwrap());
         
-        for i in 0..self.triangles.len() {
-            self.triangles[i].origin_point.unwrap().x += camera.origin_point.x;
-            self.triangles[i].origin_point.unwrap().x += camera.origin_point.y;
-            self.triangles[i].origin_point.unwrap().x += camera.origin_point.z;
-        }
+        self.triangles.iter_mut()
+            .for_each(|a| { 
+                
+                a.origin_point = 
+                Some(
+                    Point3 {
+                    x: a.origin_point.unwrap().x-camera.origin_point.x,
+                    y: a.origin_point.unwrap().y-camera.origin_point.y,
+                    z: a.origin_point.unwrap().z-camera.origin_point.z
+                    }
+                ); 
+            }
+            );
         Ok(())
     }
 }
 
 impl Mesh {
-    pub fn init(name: String, points: &[Point3], triangles: &[Triangle], color: Color) -> Mesh {
+    pub fn init(name: String, points: &[Point3], triangles: &[Triangle]) -> Mesh {
         let mut x = 0.0;
         let mut y = 0.0;
         let mut z = 0.0;
-        for i in points {
-            x += i.x;
-            y += i.y;
-            z += i.z;
-        }
+
+        points.iter().for_each(|a| {
+            x += a.x;
+            y += a.y;
+            z += a.z;
+        });
+
         let p = Point3 {x: (x/points.len() as f32), y: (y/points.len() as f32), z: (z/points.len() as f32)};
-        Mesh {name: (name), points: (points.to_vec()), triangles: (triangles.to_vec()), origin_point: (p), color: (Some(color))}
+        Mesh {name: (name), points: (points.to_vec()), triangles: (triangles.to_vec()), origin_point: (p)}
     }
 
     pub fn set_origin_point(&mut self) {
-        let mut p = Point3::init(0.0, 0.0, 0.0);
-        for i in 0..self.points.len() {
-            p.x += self.points[i].x;
-            p.y += self.points[i].y;
-            p.z += self.points[i].z;
-        }
+        let mut p = Point3 { x: 0.0, y: 0.0, z: 0.0 };
+
+        self.points.iter().for_each(|a| {
+            p.x += a.x;
+            p.y += a.y;
+            p.z += a.z;
+        });
+
         p.x /= self.points.len() as f32;
         p.y /= self.points.len() as f32;
         p.z /= self.points.len() as f32;
@@ -189,89 +269,95 @@ impl Mesh {
 
     pub fn rotate_x(&mut self, mut angle: f32) {
         angle *= PI/180.0;
-        self.set_origin_point();
-        for p in 0..self.points.len() {
-            self.points[p].y -= self.origin_point.y;
-            self.points[p].z -= self.origin_point.z;
 
-            let y = self.points[p].y;
-            let z = self.points[p].z;
+        self.points.iter_mut().for_each(
+            |a| {
+            a.y -= self.origin_point.y;
+            a.z -= self.origin_point.z;
+            
+            let y = a.y;
+            let z = a.z;
 
-            self.points[p].y = y * f32::cos(angle) - z * f32::sin(angle);
-            self.points[p].z = y * f32:: sin(angle) + z * f32::cos(angle);
+            a.y = y * angle.cos() - z * angle.sin();
+            a.z = y * angle.sin() + z * angle.cos();
 
-            self.points[p].y += self.origin_point.y;
-            self.points[p].z += self.origin_point.z;
-        }
-        self.set_origin_point();
+            a.y += self.origin_point.y;
+            a.z += self.origin_point.z;
+        });
+
         self.set_normals();
     }
 
     pub fn rotate_y(&mut self, mut angle: f32) {
         angle *= PI/180.0;
-        self.set_origin_point();
-        for p in 0..self.points.len() {
-            self.points[p].x -= self.origin_point.x;
-            self.points[p].z -= self.origin_point.z;
 
-            let x = self.points[p].x;
-            let z = self.points[p].z;
+        self.points.iter_mut().for_each(|a| {
+            a.x -= self.origin_point.x;
+            a.z -= self.origin_point.z;
 
-            self.points[p].x = x * f32::cos(angle) + z * f32::sin(angle);
-            self.points[p].z = -(x * f32:: sin(angle)) + z * f32::cos(angle);
+            let x = a.x;
+            let z = a.z;
 
-            self.points[p].x += self.origin_point.x;
-            self.points[p].z += self.origin_point.z;
-        }
-        self.set_origin_point();
+            a.x = x * angle.cos() + z * angle.sin();
+            a.z = -x * angle.sin() + z * angle.cos();
+
+            a.x += self.origin_point.x;
+            a.z += self.origin_point.z;
+        });
         self.set_normals();
     }
 
     pub fn rotate_z(&mut self, mut angle: f32) {
         angle *= PI/180.0;
 
-        self.set_origin_point();
-        for p in 0..self.points.len() {
-            self.points[p].x -= self.origin_point.x;
-            self.points[p].y -= self.origin_point.y;
+        self.points.iter_mut().for_each(|a| {
+            a.x -= self.origin_point.x;
+            a.y -= self.origin_point.y;
 
-            let x = self.points[p].x;
-            let y = self.points[p].y;
+            let x = a.x;
+            let y = a.y;
 
-            self.points[p].x = x * f32::cos(angle) - y * f32::sin(angle);
-            self.points[p].y = x * f32:: sin(angle) + y * f32::cos(angle);
+            a.x = x * angle.cos() - y * angle.sin();
+            a.y = x * angle.sin() + y * angle.cos();
 
-            self.points[p].x += self.origin_point.x;
-            self.points[p].y += self.origin_point.y;
-        }
-        self.set_origin_point();
+            a.x += self.origin_point.x;
+            a.y += self.origin_point.y;
+        });
         self.set_normals();
     }
 
     pub fn set_normals(&mut self) {
-        for i in 0..self.triangles.len() {
-            self.triangles[i].normal = Some(Triangle::calc_normal([self.points[self.triangles[i].point1], self.points[self.triangles[i].point2], self.points[self.triangles[i].point3]]));
-        }
+        self.triangles.iter_mut().for_each(|a|
+            a.normal = Some(Triangle::calc_normal([self.points[a.point1], self.points[a.point2], self.points[a.point3]]))
+        );
+    }
+
+    pub fn set_color(&mut self, color: Color) {
+        self.triangles.iter_mut().for_each(|a| a.color = Some(color));
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct Buffer {
-    pub amt_of_points: usize,
+    amt_of_points: usize,
 
     pub points: Vec<Point3>,
     pub triangles: Vec<Triangle>,
 }
 impl Buffer {
+    pub fn init() -> Buffer {
+        Buffer { amt_of_points: 0, points: Vec::new(), triangles: Vec::new() }
+    }
+
     pub fn load_mesh(&mut self, mesh: &Mesh) {
-        for i in 0..mesh.points.len() {
-            self.points.push(mesh.points[i]);
-        }
-        for i in 0..mesh.triangles.len() {
-            let l = Triangle::calc_normal([mesh.points[mesh.triangles[i].point1], mesh.points[mesh.triangles[i].point2], mesh.points[mesh.triangles[i].point3]]);
-            self.triangles.push(Triangle { point1: mesh.triangles[i].point1+self.amt_of_points, point2: mesh.triangles[i].point2+self.amt_of_points, point3: mesh.triangles[i].point3+self.amt_of_points, origin_point: mesh.triangles[i].origin_point, color: mesh.triangles[i].color, normal: Some(l) });
-        }
+        mesh.points.iter().for_each(|a| self.points.push(*a));
+        mesh.triangles.iter().for_each(|a| self.triangles.push(Triangle { point1: a.point1+self.amt_of_points, point2: a.point2+self.amt_of_points, point3: a.point3+self.amt_of_points, origin_point: a.origin_point, normal: a.normal, color: a.color }));
+
         self.amt_of_points += mesh.points.len();
+    }
+
+    pub fn load_meshes(&mut self, meshes: &[Mesh]) {
+        meshes.iter().for_each(|a| self.load_mesh(a));
     }
 }
 
@@ -279,19 +365,39 @@ impl<'a> MeshAndBuffer for Buffer {
     fn sort_triangles_in_mesh_origin_point_z_distance_from_camera(&mut self, camera: &Camera) -> Result<(), ()> {
         if self.triangles.len() == 0 {return Err(());}
         
-        for i in 0..self.triangles.len() {
-            self.triangles[i].origin_point.unwrap().x -= camera.origin_point.x;
-            self.triangles[i].origin_point.unwrap().y -= camera.origin_point.y;
-            self.triangles[i].origin_point.unwrap().z -= camera.origin_point.z;
+        let check = self.triangles.iter_mut()
+            .try_for_each(|a| -> Result<(), ()> { 
+                if a.origin_point == None {return Err(());}
+                
+                a.origin_point = 
+                Some(
+                    Point3 {
+                    x: a.origin_point.unwrap().x-camera.origin_point.x,
+                    y: a.origin_point.unwrap().y-camera.origin_point.y,
+                    z: a.origin_point.unwrap().z-camera.origin_point.z
+                    }
+                ); 
+                Ok(())}
+            );
+        if check == Err(()) {
+            return Err(());
         }
 
         self.triangles.sort_by(|a, b| b.origin_point.unwrap().z.partial_cmp(&a.origin_point.unwrap().z).unwrap());
         
-        for i in 0..self.triangles.len() {
-            self.triangles[i].origin_point.unwrap().x += camera.origin_point.x;
-            self.triangles[i].origin_point.unwrap().x += camera.origin_point.y;
-            self.triangles[i].origin_point.unwrap().x += camera.origin_point.z;
-        }
+        self.triangles.iter_mut()
+            .for_each(|a| { 
+                
+                a.origin_point = 
+                Some(
+                    Point3 {
+                    x: a.origin_point.unwrap().x-camera.origin_point.x,
+                    y: a.origin_point.unwrap().y-camera.origin_point.y,
+                    z: a.origin_point.unwrap().z-camera.origin_point.z
+                    }
+                ); 
+            }
+            );
         Ok(())
     }
 }
@@ -305,7 +411,8 @@ impl Lighting for Point3 {
             PointLight  { 
                 origin_point: Point3 { x: self.x, y: self.y, z: self.z },
                 brightness: 1.0,
-                color: Color { r: 255, g: 255, b: 255, a: 255 } 
+                color: Color { r: 255, g: 255, b: 255, a: 255 }, 
+                coefficients: (1.0, 1.0, 1.0),
             }
         )
     }
@@ -316,23 +423,14 @@ impl Lighting for Camera {
             PointLight  { 
                 origin_point: self.origin_point,
                 brightness: 1.0,
-                color: Color { r: 255, g: 255, b: 255, a: 255 } 
+                color: Color { r: 255, g: 255, b: 255, a: 255 },
+                coefficients: (1.0, 1.0, 1.0), 
             }
         )
     }
 }
 
-pub struct PointLight {
-    pub origin_point: Point3,
-    pub brightness: f32,
-    pub color: Color,
-}
-
-pub enum Light {
-    Point(PointLight),
-}
-
-impl Light {
+pub trait ConvertColors {
     fn convert_255_1(color: &Color) -> (f32, f32, f32, f32) {
         (
             color.r as f32 / 255.0,
@@ -350,34 +448,24 @@ impl Light {
             a: (color.3 * 255.0) as u8
         }
     }
-    //TODO: fix overflow risk
-    fn apply_shading_multiple_lights(color: &Color, normal: &Point3, lights: &[Light]) -> Color {
-        let mut c = Light::convert_255_1(color);
+}
+impl ConvertColors for Color {}
 
-        for i in lights {
-            let temp = Light::convert_255_1(&Light::apply_shading(color, normal, i));
-            c.0 += temp.0;
-            c.1 += temp.1;
-            c.2 += temp.2;
-        }
-        
-        
-        Light::convert_1_255(&c)
-    }
+pub struct PointLight {
+    pub coefficients: (f32, f32, f32),
 
-    fn apply_shading(color: &Color, normal: &Point3, light: &Light) -> Color {
-        match light {
-            Light::Point(x) => return Light::apply_shading_point(color, normal, x)
-        }
-    }
+    pub origin_point: Point3,
+    pub brightness: f32,
+    pub color: Color,
+}
+impl PointLight {
+    fn apply_shading(color: &Color, normal: &Point3, light: &PointLight) -> Color {
+        let d = Point3::calculate_distance(&normal, &light.origin_point);
 
-    fn apply_shading_point(color: &Color, normal: &Point3, light: &PointLight) -> Color {
         let c = Point3::get_dot_product(normal, &light.origin_point);
 
-        let converted_color = Light::convert_255_1(&color);
-        let converted_light = Light::convert_255_1(&light.color);
-
-        let d = ((normal.x-light.origin_point.x).powi(2) + (normal.y-light.origin_point.y).powi(2) + (normal.z-light.origin_point.z).powi(2)).sqrt();
+        let converted_color = Color::convert_255_1(&color);
+        let converted_light = Color::convert_255_1(&light.color);
 
         let c = ( 
             converted_color.0 * converted_light.0 * (c/d.powi(2)) * light.brightness,
@@ -385,7 +473,30 @@ impl Light {
             converted_color.2 * converted_light.2 * (c/d.powi(2)) * light.brightness,
             converted_color.3,
         );
-        Light::convert_1_255(&c)
+        Color::convert_1_255(&c)
+    }
+}
+
+pub enum Light {
+    Point(PointLight),
+}
+
+impl Light {
+    fn apply_shading_multiple_lights(color: &Color, normal: &Point3, lights: &[Light]) -> Color {
+        let mut c = (0.0, 0.0, 0.0, 255.0);
+        lights.iter().for_each(|a| {
+            let temp = Color::convert_255_1(&Light::apply_shading(color, normal, a));
+            c.0 += temp.0;
+            c.1 += temp.1;
+            c.2 += temp.2;
+        });
+        Color::convert_1_255(&c)
+    }
+
+    fn apply_shading(color: &Color, normal: &Point3, light: &Light) -> Color {
+        match light {
+            Light::Point(x) => return PointLight::apply_shading(color, normal, x)
+        }
     }
 }
 
@@ -402,6 +513,8 @@ pub struct Camera {
     near_clipping_plane: f32,
     far_clipping_plane: f32,
 
+    rotations: (f32, f32, f32),
+
     z_depth_buffer: Vec<f32>,
 
     pub forward_vec: Point3,
@@ -417,7 +530,7 @@ impl<'a> Camera {
             origin_point: (origin_point),
             width: (width),
             height: (height),
-            fov: (fov),
+            fov: fov,
             fov_radians: (fov*PI as f32/180.0),
             near_clipping_plane: (near_clipping_plane),
             far_clipping_plane: (far_clipping_plane),
@@ -427,28 +540,53 @@ impl<'a> Camera {
             up_vec: Point3::normalize_vector(Point3 { x: 0.0, y: 1.0, z: 0.0 }),
             look_vec: Point3::normalize_vector(Point3 { x: 0.0, y: 0.0, z: 1.0 }),
             target_vec: Point3::normalize_vector(Point3 { x: 0.0, y: 0.0, z: 1.0 }),
+            rotations: (0.0, 0.0, 0.0)
         }
     }
 
-    pub fn move_camera(&mut self, x: f32, y: f32, z: f32) {
-        self.origin_point.x += x;
-        self.origin_point.y += y;
-        self.origin_point.z += z;
+    pub fn rotate_x(&mut self, angle: f32) {
+        self.rotations.0 += angle;
+        if self.rotations.0 == 360.0 {
+            self.rotations.0 = 0.0
+        }
+        else if self.rotations.0 > 360.0 {
+            self.rotations.0 = self.rotations.0 - 360.0
+        }
+    }
+
+    pub fn rotate_y(&mut self, angle: f32) {
+        self.rotations.1 += angle;
+        if self.rotations.1 == 360.0 {
+            self.rotations.1 = 0.0
+        }
+        else if self.rotations.1 > 360.0 {
+            self.rotations.1 = self.rotations.1 - 360.0
+        }
+    }
+
+    pub fn rotate_z(&mut self, angle: f32) {
+        self.rotations.2 += angle;
+        if self.rotations.2 == 360.0 {
+            self.rotations.2 = 0.0
+        }
+        else if self.rotations.2 > 360.0 {
+            self.rotations.2 = self.rotations.2 - 360.0
+        }
     }
 }
 
-pub struct ObjLoader(pub Vec<Mesh>);
-impl ObjLoader {
+pub struct MeshLoader(pub Vec<Mesh>);
+impl MeshLoader {
     pub fn load_obj_file(&mut self, path:&str) -> Result<(), Box<dyn Error>> {
         let file = File::open(path)?;
         let reader = BufReader::new(file);
+        let mut normals: Vec<Point3> = Vec::new();
         let mut amt_of_points = 0;
         let mut counter = 0;
 
         for line in reader.lines() {
             let line_string = line.unwrap();
             let mut line_split = line_string.split(" ");
-            let line_split_len = line_split.clone().count();
             let line_0 = line_split.nth(0).unwrap().to_string(); 
             let obj_len = self.0.len();
 
@@ -456,36 +594,73 @@ impl ObjLoader {
                 if counter > 0 {
                     amt_of_points += self.0[obj_len-1].points.len();
                 }
-                self.0.push(Mesh::init(line_split.nth(0).unwrap().to_string(), &[],  &[], Color::RGB(180, 180, 180)));
+                self.0.push(Mesh::init(line_split.nth(0).unwrap().to_string(), &[],  &[]));
                 counter += 1;
             }
-            
-            if line_0 == "v" {
+
+            else if line_0 == "vn" {
                 let x = line_split.nth(0).unwrap().to_string();
                 let y = line_split.nth(0).unwrap().to_string();
                 let z = line_split.nth(0).unwrap().to_string();
-                self.0[obj_len-1].points.push(Point3::init(x.parse()?, y.parse()?, z.parse()?));
+                normals.push(Point3 { x: x.parse()?, y: y.parse()?, z: z.parse()? });
+            }
+            
+            else if line_0 == "v" {
+                let x = line_split.nth(0).unwrap().to_string();
+                let y = line_split.nth(0).unwrap().to_string();
+                let z = line_split.nth(0).unwrap().to_string();
+                self.0[obj_len-1].points.push(Point3 {x: x.parse()?,y: y.parse()?,z: z.parse()?});
             }
 
-            if line_0 == "f" {
-                if line_split_len == 4 {
-                    let mut p_1: u32 = line_split.nth(0).unwrap().to_string().parse()?;
-                    let mut p_2: u32 = line_split.nth(0).unwrap().to_string().parse()?;
-                    let mut p_3: u32 = line_split.nth(0).unwrap().to_string().parse()?;
+            else if line_0 == "f" {
+                let mut p_1: u32;
+                let mut p_2: u32;
+                let mut p_3: u32;
+                let mut normal: Option<Point3> = None;
+                if line_string.contains("//") {
+                    let part_1 = line_split.nth(0).unwrap().to_string();
+                    let part_2 = line_split.nth(0).unwrap().to_string();
+                    let part_3 = line_split.nth(0).unwrap().to_string();
 
-                    p_1 -= 1 + amt_of_points as u32;
-                    p_2 -= 1 + amt_of_points as u32;
-                    p_3 -= 1 + amt_of_points as u32;
+                    let mut part_1_split = part_1.split("//");
+                    let mut part_2_split = part_2.split("//");
+                    let mut part_3_split = part_3.split("//");
 
-                    let p = Point3::init(
-                        (self.0[obj_len-1].points[p_1 as usize].x + self.0[obj_len-1].points[p_2 as usize].x + self.0[obj_len-1].points[p_2 as usize].x)/3.0,
-                        (self.0[obj_len-1].points[p_1 as usize].y + self.0[obj_len-1].points[p_2 as usize].y + self.0[obj_len-1].points[p_2 as usize].y)/3.0,
-                        (self.0[obj_len-1].points[p_1 as usize].z + self.0[obj_len-1].points[p_2 as usize].z + self.0[obj_len-1].points[p_2 as usize].z)/3.0
-                    );
-                    let l = self.0[obj_len-1].color;
-                    let n = Triangle::calc_normal([self.0[obj_len-1].points[p_1 as usize], self.0[obj_len-1].points[p_2 as usize], self.0[obj_len-1].points[p_3 as usize]]);
-                    self.0[obj_len-1].triangles.push(Triangle { point1: (p_1 as usize), point2: (p_2 as usize), point3: (p_3 as usize), origin_point: Some(p), color: (l), normal: Some(n) });
+                    p_1 = part_1_split.nth(0).unwrap().to_string().parse()?;
+                    let v_1: usize = part_1_split.nth(0).unwrap().to_string().parse()?;
+
+                    p_2 = part_2_split.nth(0).unwrap().to_string().parse()?;
+                    let v_2: usize = part_2_split.nth(0).unwrap().to_string().parse()?;
+                    
+                    p_3 = part_3_split.nth(0).unwrap().to_string().parse()?;
+                    let v_3: usize = part_3_split.nth(0).unwrap().to_string().parse()?;
+
+                    normal = Some(normals[v_2-1]);
                 }
+                else {
+                    p_1 = line_split.nth(0).unwrap().to_string().parse()?;
+                    p_2 = line_split.nth(0).unwrap().to_string().parse()?;
+                    p_3 = line_split.nth(0).unwrap().to_string().parse()?;
+                }
+                p_1 -= 1 + amt_of_points as u32;
+                p_2 -= 1 + amt_of_points as u32;
+                p_3 -= 1 + amt_of_points as u32;
+
+                let p = Point3 {
+                    x: (self.0[obj_len-1].points[p_1 as usize].x + self.0[obj_len-1].points[p_2 as usize].x + self.0[obj_len-1].points[p_2 as usize].x)/3.0,
+                    y: (self.0[obj_len-1].points[p_1 as usize].y + self.0[obj_len-1].points[p_2 as usize].y + self.0[obj_len-1].points[p_2 as usize].y)/3.0,
+                    z: (self.0[obj_len-1].points[p_1 as usize].z + self.0[obj_len-1].points[p_2 as usize].z + self.0[obj_len-1].points[p_2 as usize].z)/3.0
+                };
+                let l = Some(Color { r: 180, g: 180, b: 180, a: 255 });
+                let n;
+                
+                if normal == None {
+                    n = Triangle::calc_normal([self.0[obj_len-1].points[p_1 as usize], self.0[obj_len-1].points[p_2 as usize], self.0[obj_len-1].points[p_3 as usize]]);
+                }
+                else {
+                    n = normal.unwrap();
+                }
+                self.0[obj_len-1].triangles.push(Triangle { point1: (p_1 as usize), point2: (p_2 as usize), point3: (p_3 as usize), origin_point: Some(p), color: (l), normal: Some(n) });
             }
         }  
         Ok(())
@@ -500,10 +675,15 @@ pub trait SdlWrapper {
 
     fn draw_all(&mut self, buffer: &mut Buffer, camera: &Camera);
 
-    fn check_backface_culling(points: [Point3; 3], normal: Point3, camera: &Camera) -> bool {
-        normal.x * (points[0].x - camera.origin_point.x) +
-        normal.y * (points[0].y - camera.origin_point.y) +
-        normal.z * (points[0].z - camera.origin_point.z) > 0.0
+    fn check_backface_culling(first_point_: Point3, normal: Point3, camera: &Camera) -> bool {
+        let mut first_point = first_point_;
+        Point3::rotate_x_around_point_degrees(&mut first_point, &camera.origin_point, camera.rotations.0);
+        Point3::rotate_y_around_point_degrees(&mut first_point, &camera.origin_point, camera.rotations.1);
+        Point3::rotate_z_around_point_degrees(&mut first_point, &camera.origin_point, camera.rotations.2);
+
+        normal.x * (first_point.x - camera.origin_point.x) +
+        normal.y * (first_point.y - camera.origin_point.y) +
+        normal.z * (first_point.z - camera.origin_point.z) > 0.0
     }
 }
 
@@ -511,27 +691,32 @@ impl SdlWrapper for Canvas<Window> {
     fn draw_lines_w(&mut self, buffer: &mut Buffer, camera: &Camera) -> Result<(), ()> {
         let check = buffer.sort_triangles_in_mesh_origin_point_z_distance_from_camera(camera);
         if check == Err(()) {return Err(());}
-        self.set_draw_color(Color::RGB(255, 255, 255));
+        self.set_draw_color(Color::RGB(0, 0, 0));
 
-        for i in 0..buffer.triangles.len() {
-            if buffer.triangles[i].normal == None {return Err(());}
+        let check = buffer.triangles.iter().try_for_each(|a| {
+            if a.normal == None {return Err(())};
 
-            if Canvas::check_backface_culling([buffer.points[buffer.triangles[i].point1], buffer.points[buffer.triangles[i].point2], buffer.points[buffer.triangles[i].point3]], buffer.triangles[i].normal.unwrap(), camera)
-            {
-                continue;
-            }            
-            let p1 = Point3::project_point(buffer.points[buffer.triangles[i].point1], camera);
-            let p2 = Point3::project_point(buffer.points[buffer.triangles[i].point2], camera);
-            let p3 =  Point3::project_point(buffer.points[buffer.triangles[i].point3], camera);
+            if Canvas::check_backface_culling(buffer.points[a.point1], a.normal.unwrap(), camera) {
+                return Ok(());
+            }
+            let p1 = Point3::project_point(buffer.points[a.point1], camera);
+            let p2 = Point3::project_point(buffer.points[a.point2], camera);
+            let p3 = Point3::project_point(buffer.points[a.point3], camera);
 
             if p1 == None || p2 == None || p3 == None {
-                continue;
+                return Ok(());
+            }
+            let c1 = self.draw_line(Point::new(p1.unwrap().x as i32, p1.unwrap().y as i32), Point::new(p2.unwrap().x as i32, p2.unwrap().y as i32));
+            let c2 = self.draw_line(Point::new(p1.unwrap().x as i32, p1.unwrap().y as i32), Point::new(p3.unwrap().x as i32, p3.unwrap().y as i32));
+            let c3 = self.draw_line(Point::new(p2.unwrap().x as i32, p2.unwrap().y as i32), Point::new(p3.unwrap().x as i32, p3.unwrap().y as i32));
+
+            if c1 != Ok(()) || c2 != Ok(()) || c3 != Ok(()) {
+                return Err(());
             }
 
-            self.draw_line(Point::new(p1.unwrap().x as i32, p1.unwrap().y as i32), Point::new(p2.unwrap().x as i32, p2.unwrap().y as i32)).unwrap();
-            self.draw_line(Point::new(p1.unwrap().x as i32, p1.unwrap().y as i32), Point::new(p3.unwrap().x as i32, p3.unwrap().y as i32)).unwrap();
-            self.draw_line(Point::new(p2.unwrap().x as i32, p2.unwrap().y as i32), Point::new(p3.unwrap().x as i32, p3.unwrap().y as i32)).unwrap();
-        }
+            Ok(())
+        });
+        if check == Err(()) {return Err(());}
         Ok(())
     }
 
@@ -586,49 +771,51 @@ impl SdlWrapper for Canvas<Window> {
     }
 
     fn draw_triangles(&mut self, buffer: &mut Buffer, camera: &mut Camera, lights: &[Light]) -> Result<(), ()> {
-        //let check = buffer.sort_triangles_in_mesh_origin_point_z_distance_from_camera(camera);
-        //if check == Err(()) {return Err(());}
+        let check = buffer.sort_triangles_in_mesh_origin_point_z_distance_from_camera(camera);
+        if check == Err(()) {return Err(());}
 
-        for t in 0..buffer.triangles.len() {
-            if buffer.triangles[t].normal == None {
+        let check = buffer.triangles.iter().try_for_each(|a| {
+            if a.normal == None {
                 return Err(());
             }
 
-            if Canvas::check_backface_culling([buffer.points[buffer.triangles[t].point1], buffer.points[buffer.triangles[t].point2], buffer.points[buffer.triangles[t].point3]], buffer.triangles[t].normal.unwrap(), camera) {
-                continue;
+            if Canvas::check_backface_culling(buffer.points[a.point1], a.normal.unwrap(), camera) {
+                return Ok(());
             }
-            
-            if buffer.triangles[t].color == None {
-                if lights.is_empty() == false {
-                    let mut color = Color { r: 180, g: 180, b: 180, a: 255 };
-                    color = Light::apply_shading_multiple_lights(&color, &buffer.triangles[t].normal.unwrap(), lights);
+
+            if a.color == None {
+                if !lights.is_empty() {
+                    let mut color = Color {r: 180, g: 180, b: 180, a: 255};
+                    color = Light::apply_shading_multiple_lights(&color, &a.normal.unwrap(), lights);
                     self.set_draw_color(color);
                 }
                 else {
-                    self.set_draw_color(buffer.triangles[t].color.unwrap());
+                    //TODO: change default color
+                    self.set_draw_color(Color {r: 180, g: 180, b: 180, a: 255});
                 }
             }
             else {
-                if lights.is_empty() == false {
-                    let color = Light::apply_shading_multiple_lights(&buffer.triangles[t].color.unwrap(), &buffer.triangles[t].normal.unwrap(), lights);
+                if !lights.is_empty() {
+                    let color = Light::apply_shading_multiple_lights(&a.color.unwrap(), &a.normal.unwrap(), lights);
                     self.set_draw_color(color);
                 }
                 else {
-                    self.set_draw_color(buffer.triangles[t].color.unwrap());
+                    self.set_draw_color(a.color.unwrap());
                 }
-                
             }
-            let p1 = Point3::project_point(buffer.points[buffer.triangles[t].point1], camera);
-            let p2 = Point3::project_point(buffer.points[buffer.triangles[t].point2], camera);
-            let p3 = Point3::project_point(buffer.points[buffer.triangles[t].point3], camera);
+
+            let p1 = Point3::project_point(buffer.points[a.point1], camera);
+            let p2 = Point3::project_point(buffer.points[a.point2], camera);
+            let p3 = Point3::project_point(buffer.points[a.point3], camera);
 
             if p1 == None || p2 == None || p3 == None {
-                continue;
+                return Ok(());
             }
-
             self.draw_triangle([p1.unwrap(), p2.unwrap(), p3.unwrap()], camera);
-        }
-        camera.z_depth_buffer = vec![camera.far_clipping_plane; camera.width as usize * camera.height as usize];
+
+            Ok(())
+        });
+        if check == Err(()) {return Err(());}
         Ok(())
     }
 
