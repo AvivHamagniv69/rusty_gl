@@ -3,6 +3,12 @@ name = "rusty_gl"
 version = "0.1.0"
 edition = "2021"
 
+[profile.release]
+lto = true
+panic = "abort"
+codegen-units = 1
+strip = true
+
 [dependencies]
-rand = "0.8.5"
 sdl2 = "0.35.2"
+rayon = "1.7.0"
