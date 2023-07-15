@@ -4,11 +4,11 @@ use std::fs::File;
 use std::io::BufRead;
 use std::io::BufReader;
 use std::str;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::{AtomicU8, Ordering::Relaxed};
-use std::sync::Arc;
 use std::sync::Mutex;
 use std::thread;
-use std::thread::Scope;
+
 use std::time::Instant;
 
 use sdl2::{pixels::Color, rect::Point, render::Canvas, video::Window};
@@ -20,36 +20,64 @@ pub enum LightingMode {
 
 pub struct RustyGl {
     pub lighting_mode: LightingMode,
-    amt_of_threads: AtomicU8,
+    backface_culling: AtomicBool,
+    background_color: (AtomicU8, AtomicU8, AtomicU8, AtomicU8),
 }
 impl RustyGl {
-    pub const fn init(amt_of_threads: u8) -> RustyGl {
+    pub const fn init() -> RustyGl {
         RustyGl {
             lighting_mode: LightingMode::PerTriangle,
-            amt_of_threads: AtomicU8::new(amt_of_threads),
+            background_color: (
+                AtomicU8::new(0),
+                AtomicU8::new(0),
+                AtomicU8::new(0),
+                AtomicU8::new(255),
+            ),
+            backface_culling: AtomicBool::new(true),
         }
     }
 
-    pub fn get_amt_of_threads(&self) -> u8 {
-        self.amt_of_threads.load(Relaxed)
+    pub fn get_backface_culling(&self) -> bool {
+        self.backface_culling.load(Relaxed)
     }
 
-    pub fn set_amt_of_threads(&self, num: u8) {
-        self.amt_of_threads.store(num, Relaxed)
+    pub fn set_backface_culling(&self, val: bool) {
+        self.backface_culling.store(val, Relaxed)
     }
 }
 
-pub static RUSTY_GL: RustyGl = RustyGl::init(10);
+pub static RUSTY_GL: RustyGl = RustyGl::init();
 
-#[derive(Debug, PartialEq, Clone, Copy)]
+#[derive(Debug, Default, PartialEq, Clone, Copy, PartialOrd)]
 pub struct Point3 {
     pub x: f32,
     pub y: f32,
     pub z: f32,
 }
+
+/*enum Axis {
+    X(f32),
+    Y(f32),
+    Z(f32),
+}*/
+
 impl Point3 {
-    fn rotate_x_around_point_degrees(point_: Point3, origin_point: &Point3, angle: f32) -> Point3 {
-        let a = angle * PI / 180.0;
+    /*fn find_point_on_line(line: [Point3; 2], known_axis: Axis) -> Result<Point3, ()> {
+        let v = Point3 {x: line[0].x - line[1].x, y: line[0].y-line[1].y, z: line[0].z-line[1].z};
+        match known_axis {
+            Axis::X(x) => if v.z != 0.0 || v.y != 0.0 {
+
+            },
+            Axis::Y(y) => if v.x != 0.0 || v.z != 0.0 {
+
+            },
+            Axis::Z(z) => if v.x != 0.0 || v.y != 0.0 {
+            },
+        };
+    }*/
+
+    fn rotate_x(point_: Point3, origin_point: &Point3, degrees: f32) -> Point3 {
+        let a = degrees * PI / 180.0;
         let mut point = point_;
 
         point.y -= origin_point.y;
@@ -67,8 +95,8 @@ impl Point3 {
         point
     }
 
-    fn rotate_y_around_point_degrees(point_: Point3, origin_point: &Point3, angle: f32) -> Point3 {
-        let a = angle * PI / 180.0;
+    fn rotate_y(point_: Point3, origin_point: &Point3, degrees: f32) -> Point3 {
+        let a = degrees * PI / 180.0;
         let mut point = point_;
 
         point.x -= origin_point.x;
@@ -85,8 +113,8 @@ impl Point3 {
         point
     }
 
-    fn rotate_z_around_point_degrees(point_: Point3, origin_point: &Point3, angle: f32) -> Point3 {
-        let a = angle * PI / 180.0;
+    fn rotate_z(point_: Point3, origin_point: &Point3, degrees: f32) -> Point3 {
+        let a = degrees * PI / 180.0;
         let mut point = point_;
 
         point.x -= origin_point.x;
@@ -103,7 +131,7 @@ impl Point3 {
         point
     }
 
-    fn project_point(point: Self, camera: &Camera) -> Option<Point3> {
+    fn project(point: Self, camera: &Camera) -> Option<Point3> {
         let width = camera.width as f32;
         let height = camera.height as f32;
 
@@ -150,50 +178,23 @@ impl Point3 {
             z: (point.z / m),
         }
     }
+}
 
-    fn calc_origin_point(points: &[Point3]) -> Point3 {
-        let mut temp = Point3 {
-            x: 0.0,
-            y: 0.0,
-            z: 0.0,
-        };
-        points.iter().for_each(|a| {
-            temp.x += a.x;
-            temp.y += a.y;
-            temp.z += a.z;
-        });
+struct Texture {
 
-        Point3 {
-            x: temp.x / points.len() as f32,
-            y: temp.y / points.len() as f32,
-            z: temp.z / points.len() as f32,
-        }
-    }
-
-    fn perform_camera_transformations(mut self, camera: &Camera) -> Point3 {
-        self =
-            Point3::rotate_x_around_point_degrees(self, &camera.origin_point, camera.rotations.0);
-        self =
-            Point3::rotate_y_around_point_degrees(self, &camera.origin_point, camera.rotations.1);
-        self =
-            Point3::rotate_z_around_point_degrees(self, &camera.origin_point, camera.rotations.0);
-        self.x -= camera.origin_point.x;
-        self.y -= camera.origin_point.y;
-        self.z -= camera.origin_point.z;
-        self
-    }
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct Triangle {
-    pub point1: usize,
-    pub point2: usize,
-    pub point3: usize,
+    point1: usize,
+    point2: usize,
+    point3: usize,
 
     origin_point: Point3,
     normal: Point3,
 
-    pub color: Color,
+    color: Color,
+    color_baked: Option<Color>,
 }
 
 impl Triangle {
@@ -206,16 +207,16 @@ impl Triangle {
                 && (points[2].y > height as f32 || points[2].y < 0.0))
     }
 
-    fn project_triangle(points: [Point3; 3], camera: &Camera) -> Option<TriangleProjected> {
-        let p1 = match Point3::project_point(points[0], camera) {
+    fn project(points: [Point3; 3], camera: &Camera) -> Option<TriangleProjected> {
+        let p1 = match Point3::project(points[0], camera) {
             Some(x) => x,
             None => return None,
         };
-        let p2 = match Point3::project_point(points[1], camera) {
+        let p2 = match Point3::project(points[1], camera) {
             Some(x) => x,
             None => return None,
         };
-        let p3 = match Point3::project_point(points[2], camera) {
+        let p3 = match Point3::project(points[2], camera) {
             Some(x) => x,
             None => return None,
         };
@@ -234,7 +235,7 @@ impl Triangle {
         })
     }
 
-    pub fn calc_normal(points: [Point3; 3]) -> Point3 {
+    fn calc_normal(points: [Point3; 3]) -> Point3 {
         let vu = Point3 {
             x: points[1].x - points[0].x,
             y: points[1].y - points[0].y,
@@ -255,10 +256,11 @@ impl Triangle {
     }
 }
 
-struct TriangleProjected {
-    point1: Point3,
-    point2: Point3,
-    point3: Point3,
+#[allow(unused)]
+pub struct TriangleProjected {
+    pub point1: Point3,
+    pub point2: Point3,
+    pub point3: Point3,
     origin_point: Option<Point3>,
     normal: Option<Point3>,
     color: Option<Color>,
@@ -271,7 +273,7 @@ pub trait MeshAndBuffer {
     ) -> Result<(), ()>;
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Default, Clone)]
 pub struct Mesh {
     pub name: String,
 
@@ -286,7 +288,7 @@ impl MeshAndBuffer for Mesh {
         &mut self,
         camera: &Camera,
     ) -> Result<(), ()> {
-        if self.triangles.len() == 0 {
+        if self.triangles.is_empty() {
             return Err(());
         }
 
@@ -344,7 +346,7 @@ impl Mesh {
         }
     }
 
-    pub fn set_origin_point(&mut self) {
+    pub fn update_origin_point(&mut self) {
         let mut p = Point3 {
             x: 0.0,
             y: 0.0,
@@ -363,8 +365,8 @@ impl Mesh {
         self.origin_point = p;
     }
 
-    pub fn rotate_x(&mut self, mut angle: f32) {
-        angle *= PI / 180.0;
+    pub fn rotate_x(&mut self, mut degrees: f32) {
+        degrees *= PI / 180.0;
 
         self.points.iter_mut().for_each(|a| {
             a.y -= self.origin_point.y;
@@ -373,8 +375,8 @@ impl Mesh {
             let y = a.y;
             let z = a.z;
 
-            a.y = y * angle.cos() - z * angle.sin();
-            a.z = y * angle.sin() + z * angle.cos();
+            a.y = y * degrees.cos() - z * degrees.sin();
+            a.z = y * degrees.sin() + z * degrees.cos();
 
             a.y += self.origin_point.y;
             a.z += self.origin_point.z;
@@ -383,8 +385,8 @@ impl Mesh {
         self.update_normals();
     }
 
-    pub fn rotate_y(&mut self, mut angle: f32) {
-        angle *= PI / 180.0;
+    pub fn rotate_y(&mut self, mut degrees: f32) {
+        degrees *= PI / 180.0;
 
         self.points.iter_mut().for_each(|a| {
             a.x -= self.origin_point.x;
@@ -393,8 +395,8 @@ impl Mesh {
             let x = a.x;
             let z = a.z;
 
-            a.x = x * angle.cos() + z * angle.sin();
-            a.z = -x * angle.sin() + z * angle.cos();
+            a.x = x * degrees.cos() + z * degrees.sin();
+            a.z = -x * degrees.sin() + z * degrees.cos();
 
             a.x += self.origin_point.x;
             a.z += self.origin_point.z;
@@ -402,8 +404,8 @@ impl Mesh {
         self.update_normals();
     }
 
-    pub fn rotate_z(&mut self, mut angle: f32) {
-        angle *= PI / 180.0;
+    pub fn rotate_z(&mut self, mut degrees: f32) {
+        degrees *= PI / 180.0;
 
         self.points.iter_mut().for_each(|a| {
             a.x -= self.origin_point.x;
@@ -412,13 +414,22 @@ impl Mesh {
             let x = a.x;
             let y = a.y;
 
-            a.x = x * angle.cos() - y * angle.sin();
-            a.y = x * angle.sin() + y * angle.cos();
+            a.x = x * degrees.cos() - y * degrees.sin();
+            a.y = x * degrees.sin() + y * degrees.cos();
 
             a.x += self.origin_point.x;
             a.y += self.origin_point.y;
         });
         self.update_normals();
+    }
+
+    pub fn move_mesh(&mut self, x: f32, y: f32, z: f32) {
+        self.points.iter_mut().for_each(|a| {
+            a.x += x;
+            a.y += y;
+            a.z += z;
+        });
+        self.update_normals()
     }
 
     pub fn update_normals(&mut self) {
@@ -434,14 +445,26 @@ impl Mesh {
     pub fn set_color(&mut self, color: Color) {
         self.triangles.iter_mut().for_each(|a| a.color = color);
     }
+
+    pub fn bake(&mut self, lights: &[Light]) {
+        self.triangles.iter_mut().for_each(|a| {
+            a.color_baked = Some(Light::apply_shading_multiple_lights(
+                &a.color, &a.normal, lights,
+            ))
+        })
+    }
+
+    pub fn delete_bake(&mut self) {
+        self.triangles.iter_mut().for_each(|a| a.color_baked = None);
+    }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Default, Clone)]
 pub struct Buffer {
     amt_of_points: usize,
 
-    pub points: Vec<Point3>,
-    pub triangles: Vec<Triangle>,
+    points: Vec<Point3>,
+    triangles: Vec<Triangle>,
 }
 impl Buffer {
     pub fn init() -> Buffer {
@@ -462,6 +485,7 @@ impl Buffer {
                 origin_point: a.origin_point,
                 normal: a.normal,
                 color: a.color,
+                color_baked: a.color_baked,
             })
         });
 
@@ -473,12 +497,12 @@ impl Buffer {
     }
 }
 
-impl<'a> MeshAndBuffer for Buffer {
+impl MeshAndBuffer for Buffer {
     fn sort_triangles_in_mesh_origin_point_z_distance_from_camera(
         &mut self,
         camera: &Camera,
     ) -> Result<(), ()> {
-        if self.triangles.len() == 0 {
+        if self.triangles.is_empty() {
             return Err(());
         }
 
@@ -565,6 +589,7 @@ impl ConvertColors for Color {}
 
 #[derive(Debug, Clone, Copy)]
 pub struct PointLight {
+    // TODO
     pub coefficients: (f32, f32, f32),
 
     pub origin_point: Point3,
@@ -573,17 +598,20 @@ pub struct PointLight {
 }
 impl PointLight {
     fn apply_shading(color: &Color, normal: &Point3, light: &PointLight) -> Color {
-        let d = Point3::calculate_distance(&normal, &light.origin_point);
+        let d = Point3::calculate_distance(normal, &light.origin_point).powi(2);
+        if light.brightness / 10.0 >= d.sqrt() {
+            return *color;
+        }
 
         let c = Point3::get_dot_product(normal, &light.origin_point);
 
-        let converted_color = Color::convert_255_1(&color);
+        let converted_color = Color::convert_255_1(color);
         let converted_light = Color::convert_255_1(&light.color);
 
         let c = (
-            converted_color.0 * converted_light.0 * (c / d.powi(2)) * light.brightness,
-            converted_color.1 * converted_light.1 * (c / d.powi(2)) * light.brightness,
-            converted_color.2 * converted_light.2 * (c / d.powi(2)) * light.brightness,
+            converted_color.0 * converted_light.0 * (c / d) * light.brightness,
+            converted_color.1 * converted_light.1 * (c / d) * light.brightness,
+            converted_color.2 * converted_light.2 * (c / d) * light.brightness,
             converted_color.3,
         );
         Color::convert_1_255(&c)
@@ -609,7 +637,13 @@ impl Light {
 
     fn apply_shading(color: &Color, normal: &Point3, light: &Light) -> Color {
         match light {
-            Light::Point(x) => return PointLight::apply_shading(color, normal, x),
+            Light::Point(x) => PointLight::apply_shading(color, normal, x),
+        }
+    }
+
+    pub fn unwrap_point(&self) -> Option<PointLight> {
+        match self {
+            Light::Point(x) => Some(x.clone()),
         }
     }
 }
@@ -621,24 +655,15 @@ pub struct Camera {
     pub width: u16,
     pub height: u16,
 
-    fov: f32,
     fov_radians: f32,
 
     near_clipping_plane: f32,
     far_clipping_plane: f32,
 
     rotations: (f32, f32, f32),
-
-    z_depth_buffer: Vec<f32>,
-
-    pub forward_vec: Point3,
-    pub right_vec: Point3,
-    pub up_vec: Point3,
-    pub look_vec: Point3,
-    pub target_vec: Point3,
 }
 
-impl<'a> Camera {
+impl Camera {
     pub fn init(
         origin_point: Point3,
         width: u16,
@@ -651,67 +676,59 @@ impl<'a> Camera {
             origin_point: (origin_point),
             width: (width),
             height: (height),
-            fov: fov,
-            fov_radians: (fov * PI as f32 / 180.0),
+            fov_radians: (fov * PI / 180.0),
             near_clipping_plane: (near_clipping_plane),
             far_clipping_plane: (far_clipping_plane),
-            z_depth_buffer: vec![far_clipping_plane; width as usize * height as usize],
-            forward_vec: Point3::normalize_vector(Point3 {
-                x: 0.0,
-                y: 0.0,
-                z: 1.0,
-            }),
-            right_vec: Point3::normalize_vector(Point3 {
-                x: -1.0,
-                y: 0.0,
-                z: 0.0,
-            }),
-            up_vec: Point3::normalize_vector(Point3 {
-                x: 0.0,
-                y: 1.0,
-                z: 0.0,
-            }),
-            look_vec: Point3::normalize_vector(Point3 {
-                x: 0.0,
-                y: 0.0,
-                z: 1.0,
-            }),
-            target_vec: Point3::normalize_vector(Point3 {
-                x: 0.0,
-                y: 0.0,
-                z: 1.0,
-            }),
             rotations: (0.0, 0.0, 0.0),
         }
     }
 
-    pub fn rotate_x(&mut self, angle: f32) {
-        self.rotations.0 += angle;
+    pub fn rotate_x(&mut self, degrees: f32) {
+        self.rotations.0 += degrees;
         if self.rotations.0 == 360.0 {
             self.rotations.0 = 0.0
         } else if self.rotations.0 > 360.0 {
-            self.rotations.0 = self.rotations.0 - 360.0
+            self.rotations.0 -= 360.0
         }
     }
 
-    pub fn rotate_y(&mut self, angle: f32) {
-        self.rotations.1 += angle;
+    pub fn rotate_y(&mut self, degrees: f32) {
+        self.rotations.1 += degrees;
         if self.rotations.1 == 360.0 {
             self.rotations.1 = 0.0
         } else if self.rotations.1 > 360.0 {
-            self.rotations.1 = self.rotations.1 - 360.0
+            self.rotations.1 -= 360.0
         }
     }
 
-    pub fn rotate_z(&mut self, angle: f32) {
-        self.rotations.2 += angle;
+    pub fn rotate_z(&mut self, degrees: f32) {
+        self.rotations.2 += degrees;
         if self.rotations.2 == 360.0 {
             self.rotations.2 = 0.0
         } else if self.rotations.2 > 360.0 {
-            self.rotations.2 = self.rotations.2 - 360.0
+            self.rotations.2 -= 360.0
         }
     }
+
+    fn perform_transformations(mut point: Point3, camera: &Camera) -> Point3 {
+        point = Point3::rotate_x(point, &camera.origin_point, camera.rotations.0);
+        point = Point3::rotate_y(point, &camera.origin_point, camera.rotations.1);
+        point = Point3::rotate_z(point, &camera.origin_point, camera.rotations.0);
+        point.x -= camera.origin_point.x;
+        point.y -= camera.origin_point.y;
+        point.z -= camera.origin_point.z;
+        point
+    }
 }
+
+#[derive(Debug)]
+struct MyError;
+impl std::fmt::Display for MyError {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "There is an error: {}", self)
+    }
+}
+impl Error for MyError {}
 
 pub struct MeshLoader(pub Vec<Mesh>);
 impl MeshLoader {
@@ -723,9 +740,13 @@ impl MeshLoader {
         let mut counter = 0;
 
         for line in reader.lines() {
-            let line_string = line.unwrap();
-            let mut line_split = line_string.split(" ");
-            let line_0 = line_split.nth(0).unwrap().to_string();
+            let line_string = line?;
+            let mut line_split = line_string.split(' ');
+            let line_0 = match line_split.next() {
+                Some(x) => x,
+                None => return Err(Box::new(MyError)),
+            }
+            .to_string();
             let obj_len = self.0.len();
 
             if line_0 == "o" {
@@ -733,21 +754,21 @@ impl MeshLoader {
                     amt_of_points += self.0[obj_len - 1].points.len();
                 }
                 self.0
-                    .push(Mesh::init(line_split.nth(0).unwrap().to_string(), &[], &[]));
+                    .push(Mesh::init(line_split.next().expect("cant read file, file is not in the correct format or has been tampered with").to_string(), &[], &[]));
                 counter += 1;
             } else if line_0 == "vn" {
-                let x = line_split.nth(0).unwrap().to_string();
-                let y = line_split.nth(0).unwrap().to_string();
-                let z = line_split.nth(0).unwrap().to_string();
+                let x = line_split.next().expect("cant read file, file is not in the correct format or has been tampered with").to_string();
+                let y = line_split.next().expect("cant read file, file is not in the correct format or has been tampered with").to_string();
+                let z = line_split.next().expect("cant read file, file is not in the correct format or has been tampered with").to_string();
                 normals.push(Point3 {
                     x: x.parse()?,
                     y: y.parse()?,
                     z: z.parse()?,
                 });
             } else if line_0 == "v" {
-                let x = line_split.nth(0).unwrap().to_string();
-                let y = line_split.nth(0).unwrap().to_string();
-                let z = line_split.nth(0).unwrap().to_string();
+                let x = line_split.next().expect("cant read file, file is not in the correct format or has been tampered with").to_string();
+                let y = line_split.next().expect("cant read file, file is not in the correct format or has been tampered with").to_string();
+                let z = line_split.next().expect("cant read file, file is not in the correct format or has been tampered with").to_string();
                 self.0[obj_len - 1].points.push(Point3 {
                     x: x.parse()?,
                     y: y.parse()?,
@@ -759,28 +780,28 @@ impl MeshLoader {
                 let mut p_3: u32;
                 let mut normal: Option<Point3> = None;
                 if line_string.contains("//") {
-                    let part_1 = line_split.nth(0).unwrap().to_string();
-                    let part_2 = line_split.nth(0).unwrap().to_string();
-                    let part_3 = line_split.nth(0).unwrap().to_string();
+                    let part_1 = line_split.next().expect("cant read file, file is not in the correct format or has been tampered with").to_string();
+                    let part_2 = line_split.next().expect("cant read file, file is not in the correct format or has been tampered with").to_string();
+                    let part_3 = line_split.next().expect("cant read file, file is not in the correct format or has been tampered with").to_string();
 
                     let mut part_1_split = part_1.split("//");
                     let mut part_2_split = part_2.split("//");
                     let mut part_3_split = part_3.split("//");
 
-                    p_1 = part_1_split.nth(0).unwrap().to_string().parse()?;
-                    let v_1: usize = part_1_split.nth(0).unwrap().to_string().parse()?;
+                    p_1 = part_1_split.next().expect("cant read file, file is not in the correct format or has been tampered with").to_string().parse()?;
+                    let _v_1: usize = part_1_split.next().expect("cant read file, file is not in the correct format or has been tampered with").to_string().parse()?;
 
-                    p_2 = part_2_split.nth(0).unwrap().to_string().parse()?;
-                    let v_2: usize = part_2_split.nth(0).unwrap().to_string().parse()?;
+                    p_2 = part_2_split.next().expect("cant read file, file is not in the correct format or has been tampered with").to_string().parse()?;
+                    let v_2: usize = part_2_split.next().expect("cant read file, file is not in the correct format or has been tampered with").to_string().parse()?;
 
-                    p_3 = part_3_split.nth(0).unwrap().to_string().parse()?;
-                    let v_3: usize = part_3_split.nth(0).unwrap().to_string().parse()?;
+                    p_3 = part_3_split.next().expect("cant read file, file is not in the correct format or has been tampered with").to_string().parse()?;
+                    let _v_3: usize = part_3_split.next().expect("cant read file, file is not in the correct format or has been tampered with").to_string().parse()?;
 
                     normal = Some(normals[v_2 - 1]);
                 } else {
-                    p_1 = line_split.nth(0).unwrap().to_string().parse()?;
-                    p_2 = line_split.nth(0).unwrap().to_string().parse()?;
-                    p_3 = line_split.nth(0).unwrap().to_string().parse()?;
+                    p_1 = line_split.next().expect("cant read file, file is not in the correct format or has been tampered with").to_string().parse()?;
+                    p_2 = line_split.next().expect("cant read file, file is not in the correct format or has been tampered with").to_string().parse()?;
+                    p_3 = line_split.next().expect("cant read file, file is not in the correct format or has been tampered with").to_string().parse()?;
                 }
                 p_1 -= 1 + amt_of_points as u32;
                 p_2 -= 1 + amt_of_points as u32;
@@ -808,7 +829,7 @@ impl MeshLoader {
                 };
                 let n;
 
-                if normal == None {
+                if normal.is_none() {
                     n = Triangle::calc_normal([
                         self.0[obj_len - 1].points[p_1 as usize],
                         self.0[obj_len - 1].points[p_2 as usize],
@@ -824,6 +845,7 @@ impl MeshLoader {
                     origin_point: p,
                     color: (l),
                     normal: n,
+                    color_baked: None,
                 });
             }
         }
@@ -831,66 +853,56 @@ impl MeshLoader {
     }
 }
 
-/*pub trait SdlWrapper {
+fn backface_cull(first_point: &Point3, normal: &Point3) -> bool {
+    normal.x * (first_point.x) + normal.y * (first_point.y) + normal.z * (first_point.z) >= 0.0
+}
+
+#[allow(unused_variables, unused_mut)]
+pub trait SdlRendering {
     fn draw_lines_w(&mut self, buffer: &mut Buffer, camera: &Camera) -> Result<(), ()>;
-
-    fn draw_triangle(&mut self, points: [Point3; 3], camera: &Camera);
-    fn draw_triangles(&mut self, buffer: &mut Buffer, camera: &Camera, lights: &Vec<Light>) -> Result<(), ()>;
-
-
-}*/
-
-/*impl SdlWrapper for Canvas<Window> {
-
-}*/
-
-pub struct CanvasWrapper(pub Canvas<Window>);
-
-impl CanvasWrapper {
-    pub fn init(window: Window) -> CanvasWrapper {
-        CanvasWrapper {
-            0: window.into_canvas().build().unwrap(),
-        }
-    }
-
-    fn check_backface_culling(first_point: &Point3, normal: &Point3) -> bool {
-        normal.x * (first_point.x) + normal.y * (first_point.y) + normal.z * (first_point.z) >= 0.0
-    }
-
-    pub fn draw_lines_w(&mut self, buffer: &mut Buffer, camera: &Camera) -> Result<(), ()> {
+    fn draw_triangle_single_threaded(&mut self, mut points_projected: [Point3; 3], color: Color) {}
+}
+impl SdlRendering for Canvas<Window> {
+    fn draw_lines_w(&mut self, buffer: &mut Buffer, camera: &Camera) -> Result<(), ()> {
         let check = buffer.sort_triangles_in_mesh_origin_point_z_distance_from_camera(camera);
         if check == Err(()) {
             return Err(());
         }
-        self.0.set_draw_color(Color::RGB(0, 0, 0));
+        self.set_draw_color(Color::RGB(0, 0, 0));
 
         let check = buffer.triangles.iter().try_for_each(|a| {
-            let p_trans1 = Point3::perform_camera_transformations(buffer.points[a.point1], camera);
-            let p_trans2 = Point3::perform_camera_transformations(buffer.points[a.point2], camera);
-            let p_trans3 = Point3::perform_camera_transformations(buffer.points[a.point3], camera);
+            let p_trans1 = Camera::perform_transformations(buffer.points[a.point1], camera);
+            let p_trans2 = Camera::perform_transformations(buffer.points[a.point2], camera);
+            let p_trans3 = Camera::perform_transformations(buffer.points[a.point3], camera);
             let normal = Triangle::calc_normal([p_trans1, p_trans2, p_trans3]);
 
-            if CanvasWrapper::check_backface_culling(&p_trans1, &normal) {
+            if backface_cull(&p_trans1, &normal) {
                 return Ok(());
             }
-            let p1 = Point3::project_point(buffer.points[a.point1], camera);
-            let p2 = Point3::project_point(buffer.points[a.point2], camera);
-            let p3 = Point3::project_point(buffer.points[a.point3], camera);
+            let p1 = match Point3::project(buffer.points[a.point1], camera) {
+                Some(x) => x,
+                None => return Err(()),
+            };
+            let p2 = match Point3::project(buffer.points[a.point2], camera) {
+                Some(x) => x,
+                None => return Err(()),
+            };
+            let p3 = match Point3::project(buffer.points[a.point3], camera) {
+                Some(x) => x,
+                None => return Err(()),
+            };
 
-            if p1 == None || p2 == None || p3 == None {
-                return Ok(());
-            }
-            let c1 = self.0.draw_line(
-                Point::new(p1.unwrap().x as i32, p1.unwrap().y as i32),
-                Point::new(p2.unwrap().x as i32, p2.unwrap().y as i32),
+            let c1 = self.draw_line(
+                Point::new(p1.x as i32, p1.y as i32),
+                Point::new(p2.x as i32, p2.y as i32),
             );
-            let c2 = self.0.draw_line(
-                Point::new(p1.unwrap().x as i32, p1.unwrap().y as i32),
-                Point::new(p3.unwrap().x as i32, p3.unwrap().y as i32),
+            let c2 = self.draw_line(
+                Point::new(p1.x as i32, p1.y as i32),
+                Point::new(p3.x as i32, p3.y as i32),
             );
-            let c3 = self.0.draw_line(
-                Point::new(p2.unwrap().x as i32, p2.unwrap().y as i32),
-                Point::new(p3.unwrap().x as i32, p3.unwrap().y as i32),
+            let c3 = self.draw_line(
+                Point::new(p2.x as i32, p2.y as i32),
+                Point::new(p3.x as i32, p3.y as i32),
             );
 
             if c1 != Ok(()) || c2 != Ok(()) || c3 != Ok(()) {
@@ -905,121 +917,106 @@ impl CanvasWrapper {
         Ok(())
     }
 
-    fn draw_triangle(&mut self, points_: [Point3; 3], camera: &Camera) {
-        let mut points = points_;
-
-        if points[1].y < points[0].y {
-            points.swap(0, 1)
+    fn draw_triangle_single_threaded(&mut self, mut points_projected: [Point3; 3], color: Color) {
+        if points_projected[1].y < points_projected[0].y {
+            points_projected.swap(0, 1)
         };
-        if points[2].y < points[0].y {
-            points.swap(2, 0)
+        if points_projected[2].y < points_projected[0].y {
+            points_projected.swap(2, 0)
         };
-        if points[2].y < points[1].y {
-            points.swap(2, 1)
+        if points_projected[2].y < points_projected[1].y {
+            points_projected.swap(2, 1)
         };
 
         let m_0_2;
         let m_0_1;
         let m_1_2;
 
-        if points[2].x - points[0].x != 0.0 {
-            m_0_2 = (points[2].y - points[0].y) / (points[2].x - points[0].x);
+        if points_projected[2].x - points_projected[0].x != 0.0 {
+            m_0_2 = (points_projected[2].y - points_projected[0].y)
+                / (points_projected[2].x - points_projected[0].x);
         } else {
-            m_0_2 = (points[2].y - points[0].y) / (0.1);
+            m_0_2 = (points_projected[2].y - points_projected[0].y) / (0.1);
         }
 
-        if points[1].x - points[0].x != 0.0 {
-            m_0_1 = (points[1].y - points[0].y) / (points[1].x - points[0].x);
+        if points_projected[1].x - points_projected[0].x != 0.0 {
+            m_0_1 = (points_projected[1].y - points_projected[0].y)
+                / (points_projected[1].x - points_projected[0].x);
         } else {
-            m_0_1 = (points[1].y - points[0].y) / (0.1);
+            m_0_1 = (points_projected[1].y - points_projected[0].y) / (0.1);
         }
 
-        if points[2].x - points[1].x != 0.0 {
-            m_1_2 = (points[2].y - points[1].y) / (points[2].x - points[1].x);
+        if points_projected[2].x - points_projected[1].x != 0.0 {
+            m_1_2 = (points_projected[2].y - points_projected[1].y)
+                / (points_projected[2].x - points_projected[1].x);
         } else {
-            m_1_2 = (points[2].y - points[1].y) / (0.1);
+            m_1_2 = (points_projected[2].y - points_projected[1].y) / (0.1);
         }
 
-        let b_0_2 = points[0].y - m_0_2 * points[0].x;
-        let b_0_1 = points[0].y - m_0_1 * points[0].x;
-        let b_1_2 = points[1].y - m_1_2 * points[1].x;
+        let b_0_2 = points_projected[0].y - m_0_2 * points_projected[0].x;
+        let b_0_1 = points_projected[0].y - m_0_1 * points_projected[0].x;
+        let b_1_2 = points_projected[1].y - m_1_2 * points_projected[1].x;
 
-        for y in points[0].y as i32 + 1..=points[2].y as i32 {
-            if y <= points[1].y as i32 {
-                let left_x = -((b_0_1 - y as f32) / m_0_1);
-                let right_x = -((b_0_2 - y as f32) / m_0_2);
+        for y in points_projected[0].y as i32 + 1..=points_projected[1].y as i32 {
+            let left_x = -((b_0_1 - y as f32) / m_0_1);
+            let right_x = -((b_0_2 - y as f32) / m_0_2);
 
-                for x in f32::min(left_x, right_x) as i32..=f32::max(left_x, right_x) as i32 {
-                    self.0.draw_point(Point::new(x, y)).unwrap();
-                }
-            } else {
-                let left_x = -((b_1_2 - y as f32) / m_1_2);
-                let right_x = -((b_0_2 - y as f32) / m_0_2);
+            for x in f32::min(left_x, right_x) as i32..=f32::max(left_x, right_x) as i32 {
+                self.draw_point(Point::new(x, y)).unwrap();
+            }
+        }
+        for y in points_projected[1].y as i32 + 1..=points_projected[2].y as i32 {
+            let left_x = -((b_1_2 - y as f32) / m_1_2);
+            let right_x = -((b_0_2 - y as f32) / m_0_2);
 
-                for x in f32::min(left_x, right_x) as i32..=f32::max(left_x, right_x) as i32 {
-                    self.0.draw_point(Point::new(x, y)).unwrap();
-                }
+            for x in f32::min(left_x, right_x) as i32..=f32::max(left_x, right_x) as i32 {
+                self.draw_point(Point::new(x, y)).unwrap();
             }
         }
     }
+}
 
-    pub fn draw_triangles(
+pub trait SdlWrapper {
+    fn draw_triangles_single_threaded(
         &mut self,
-        mut buffer: Buffer,
-        camera: &Camera,
+        buffer: Buffer,
+        camera: &mut Camera,
         lights: &Vec<Light>,
-    ) -> Result<(), ()> {
-        let start = Instant::now();
-        let check = buffer.sort_triangles_in_mesh_origin_point_z_distance_from_camera(camera);
-        if check == Err(()) {
-            return Err(());
-        }
+    ) -> Result<(), ()>;
 
-        if buffer.triangles.len() < RUSTY_GL.get_amt_of_threads() as usize
-            || RUSTY_GL.get_amt_of_threads() < 2
-        {
-            buffer.triangles.iter().for_each(|tri| {
-                let p_trans1 =
-                    Point3::perform_camera_transformations(buffer.points[tri.point1], camera);
-                let p_trans2 =
-                    Point3::perform_camera_transformations(buffer.points[tri.point2], camera);
-                let p_trans3 =
-                    Point3::perform_camera_transformations(buffer.points[tri.point3], camera);
-                let triangle =
-                    match Triangle::project_triangle([p_trans1, p_trans2, p_trans3], camera) {
-                        Some(x) => x,
-                        None => return,
-                    };
-                let normal = Triangle::calc_normal([p_trans1, p_trans2, p_trans3]);
+    fn draw_triangles_multi_threaded(
+        &mut self,
+        buffer: Buffer,
+        camera: &mut Camera,
+        lights: &Vec<Light>,
+        amt_threads: usize
+    ) -> Result<(), ()>;
+}
 
-                if CanvasWrapper::check_backface_culling(&p_trans1, &normal) {
-                    return;
-                }
+impl SdlWrapper for Canvas<Window> {
+    fn draw_triangles_multi_threaded(
+            &mut self,
+            mut buffer: Buffer,
+            camera: &mut Camera,
+            lights: &Vec<Light>,
+            amt_threads: usize
+        ) -> Result<(), ()> {
+            let start: Instant = Instant::now();
+            let check = buffer.sort_triangles_in_mesh_origin_point_z_distance_from_camera(camera);
+            if check == Err(()) {
+                return Err(());
+            }
 
-                if !lights.is_empty() {
-                    self.0.set_draw_color(Light::apply_shading_multiple_lights(
-                        &tri.color,
-                        &tri.normal,
-                        lights,
-                    ));
-                    self.draw_triangle([triangle.point1, triangle.point2, triangle.point3], camera);
-                } else {
-                    self.0.set_draw_color(tri.color);
-                    self.draw_triangle([triangle.point1, triangle.point2, triangle.point3], camera);
-                }
-            });
-            return Ok(());
-        }
         let triangles_mutex = Mutex::new(
             buffer
                 .triangles
-                .chunks(buffer.triangles.len() / RUSTY_GL.get_amt_of_threads() as usize),
+                .chunks(buffer.triangles.len() / amt_threads as usize),
         );
         let tri_vec: Mutex<Vec<(Point3, Point3, Point3, Color)>> = Mutex::new(vec![]);
         let points = buffer.points;
 
         thread::scope(|scope| {
-            for _ in 0..RUSTY_GL.get_amt_of_threads() {
+            for _ in 0..amt_threads {
                 scope.spawn(|| {
                     let mut vec: Vec<(Point3, Point3, Point3, Color)> = vec![];
                     let mut lock;
@@ -1030,34 +1027,37 @@ impl CanvasWrapper {
                         drop(lock);
                         chunk.iter().for_each(|tri| {
                             let p_trans1 =
-                                Point3::perform_camera_transformations(points[tri.point1], camera);
+                                Camera::perform_transformations(points[tri.point1], camera);
                             let p_trans2 =
-                                Point3::perform_camera_transformations(points[tri.point2], camera);
+                                Camera::perform_transformations(points[tri.point2], camera);
                             let p_trans3 =
-                                Point3::perform_camera_transformations(points[tri.point3], camera);
-                            let triangle = match Triangle::project_triangle(
-                                [p_trans1, p_trans2, p_trans3],
-                                camera,
-                            ) {
-                                Some(x) => x,
-                                None => return,
-                            };
+                                Camera::perform_transformations(points[tri.point3], camera);
                             let normal = Triangle::calc_normal([p_trans1, p_trans2, p_trans3]);
 
-                            if CanvasWrapper::check_backface_culling(&p_trans1, &normal) {
+                            if backface_cull(&p_trans1, &normal) {
                                 return;
                             }
+                            let triangle =
+                                match Triangle::project([p_trans1, p_trans2, p_trans3], camera) {
+                                    Some(x) => x,
+                                    None => return,
+                                };
 
-                            if !lights.is_empty() {
+                            if !lights.is_empty() && tri.color_baked.is_none() {
                                 vec.push((
                                     triangle.point1,
                                     triangle.point2,
                                     triangle.point3,
                                     Light::apply_shading_multiple_lights(
-                                        &tri.color,
-                                        &tri.normal,
-                                        &lights,
+                                        &tri.color, &tri.normal, lights,
                                     ),
+                                ))
+                            } else if tri.color_baked.is_some() {
+                                vec.push((
+                                    triangle.point1,
+                                    triangle.point2,
+                                    triangle.point3,
+                                    tri.color_baked.unwrap(),
                                 ))
                             } else {
                                 vec.push((
@@ -1068,20 +1068,77 @@ impl CanvasWrapper {
                                 ))
                             }
                         });
-                        dbg!();
                     }
                     tri_vec.lock().unwrap().append(&mut vec);
                 });
             }
         });
-        let duration: std::time::Duration = start.elapsed();
 
         tri_vec.lock().unwrap().iter().for_each(|a| {
-            self.0.set_draw_color(a.3);
-            self.draw_triangle([a.0, a.1, a.2], camera)
+            self.set_draw_color(a.3);
+            self.draw_triangle_single_threaded([a.0, a.1, a.2], a.3)
         });
-
+        let duration: std::time::Duration = start.elapsed();
         println!("draw_triangles: {:#?}", duration);
+        Ok(())
+    }
+
+    fn draw_triangles_single_threaded(
+        &mut self,
+        mut buffer: Buffer,
+        camera: &mut Camera,
+        lights: &Vec<Light>,
+    ) -> Result<(), ()> {
+        let start: Instant = Instant::now();
+        let check = buffer.sort_triangles_in_mesh_origin_point_z_distance_from_camera(camera);
+        if check == Err(()) {
+            return Err(());
+        }
+
+        buffer.triangles.iter().for_each(|tri| {
+            let p_trans1 = Camera::perform_transformations(buffer.points[tri.point1], camera);
+            let p_trans2 = Camera::perform_transformations(buffer.points[tri.point2], camera);
+            let p_trans3 = Camera::perform_transformations(buffer.points[tri.point3], camera);
+            let normal = Triangle::calc_normal([p_trans1, p_trans2, p_trans3]);
+
+            if RUSTY_GL.get_backface_culling() == true && backface_cull(&p_trans1, &normal) {
+                return;
+            }
+
+            let triangle = match Triangle::project([p_trans1, p_trans2, p_trans3], camera) {
+                Some(x) => x,
+                None => return,
+            };
+
+            if !lights.is_empty() && tri.color_baked.is_none() {
+                let color = Light::apply_shading_multiple_lights(
+                    &tri.color,
+                    &tri.normal,
+                    lights,
+                ); 
+                self.set_draw_color(color);
+                self.draw_triangle_single_threaded([
+                    triangle.point1,
+                    triangle.point2,
+                    triangle.point3,
+                ], color);
+            } else if tri.color_baked.is_some() {
+                self.set_draw_color(tri.color_baked.unwrap());
+                self.draw_triangle_single_threaded([
+                    triangle.point1,
+                    triangle.point2,
+                    triangle.point3,
+                ], tri.color_baked.unwrap());
+            } else {
+                self.set_draw_color(tri.color);
+                self.draw_triangle_single_threaded([
+                    triangle.point1,
+                    triangle.point2,
+                    triangle.point3,],
+                    tri.color
+                );
+            }
+        });
         Ok(())
     }
 }
